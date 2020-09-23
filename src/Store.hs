@@ -4,6 +4,7 @@ module Store where
 import Control.Applicative (empty)
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
+import qualified Data.List as List
 
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), Statement(..), Block(..))
@@ -15,67 +16,112 @@ class Monad m => MonadStore m where
 
   write :: Hash a -> Node a -> m ()
 
-followPath :: MonadStore m => Path a b -> Hash a -> m (Maybe (Hash b))
-followPath path_ = runMaybeT . go path_
+data SetH a b
+  = SetH
+  { rootHash :: Hash a
+  , targetHash :: Hash b
+  , valueHash :: Hash b
+  }
+
+setH :: MonadStore m => Path a b -> m (Hash b)-> Hash a -> m (Maybe (SetH a b))
+setH path_ val_ = runMaybeT . go path_ val_
   where
-    go :: MonadStore m => Path a b -> Hash a -> MaybeT m (Hash b)
-    go path h =
+    go :: MonadStore m => Path a b -> m (Hash b) -> Hash a -> MaybeT m (SetH a b)
+    go path mval rooth =
       case path of
-        Nil -> pure h
+        Nil -> do
+          valh <- lift mval
+          pure $ SetH { rootHash = valh, targetHash = rooth, valueHash = valh }
         Cons l rest -> do
-          n <- MaybeT $ lookupNode h
+          n <- MaybeT $ lookupNode rooth
           case l of
             For_Ident -> empty
             For_Expr ->
               case n of
-                NFor _ expr _ -> go rest expr
+                NFor ident exprh bodyh -> do
+                  res <- go rest mval exprh
+                  rooth' <- lift . addNode $ NFor ident (rootHash res) bodyh
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
             For_Block ->
               case n of
-                NFor _ _ block -> go rest block
+                NFor ident exprh bodyh -> do
+                  res <- go rest mval bodyh
+                  rooth' <- lift . addNode $ NFor ident exprh (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
             IfThen_Cond ->
               case n of
-                NIfThen cond _ -> go rest cond
+                NIfThen condh then_h -> do
+                  res <- go rest mval condh
+                  rooth' <- lift . addNode $ NIfThen (rootHash res) then_h
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
             IfThen_Then ->
               case n of
-                NIfThen _ then_ -> go rest then_
+                NIfThen condh then_h -> do
+                  res <- go rest mval then_h
+                  rooth' <- lift . addNode $ NIfThen condh (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
             IfThenElse_Cond ->
               case n of
-                NIfThenElse cond _ _ -> go rest cond
+                NIfThenElse condh then_h else_h -> do
+                  res <- go rest mval condh
+                  rooth' <- lift . addNode $ NIfThenElse (rootHash res) then_h else_h
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
             IfThenElse_Then ->
               case n of
-                NIfThenElse _ then_ _ -> go rest then_
+                NIfThenElse condh then_h else_h -> do
+                  res <- go rest mval then_h
+                  rooth' <- lift . addNode $ NIfThenElse condh (rootHash res) else_h
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
             IfThenElse_Else ->
               case n of
-                NIfThenElse _ _ else_ -> go rest else_
+                NIfThenElse condh then_h else_h -> do
+                  res <- go rest mval else_h
+                  rooth' <- lift . addNode $ NIfThenElse condh then_h (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
             BinOp_Left ->
               case n of
-                NBinOp _ left _ -> go rest left
+                NBinOp op lefth righth -> do
+                  res <- go rest mval lefth
+                  rooth' <- lift . addNode $ NBinOp op (rootHash res) righth
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
             BinOp_Right ->
               case n of
-                NBinOp _ _ right -> go rest right
+                NBinOp op lefth righth -> do
+                  res <- go rest mval righth
+                  rooth' <- lift . addNode $ NBinOp op lefth (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
             UnOp_Value -> do
               case n of
-                NUnOp _ value -> go rest value
+                NUnOp op valueh -> do
+                  res <- go rest mval valueh
+                  rooth' <- lift . addNode $ NUnOp op (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
             Block_Index ix -> do
               case n of
-                NBlock sts | 0 <= ix && ix < length sts -> go rest (sts !! ix)
+                NBlock sts | 0 <= ix && ix < length sts -> do
+                  let (prefix, more) = List.splitAt ix sts
+                  case more of
+                    [] -> error "impossible"
+                    elh : suffix -> do
+                      res <- go rest mval elh
+                      rooth' <- lift . addNode $ NBlock (prefix ++ rootHash res : suffix)
+                      pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
-
 
 addNode :: (KnownHashType a, MonadStore m) => Node a -> m (Hash a)
 addNode n = do

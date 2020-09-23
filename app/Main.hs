@@ -8,7 +8,7 @@ import Path (Path(..), Level(..))
 import Syntax (Expr(..), BinOp(..))
 import Versioned (replace, snapshot)
 import Versioned.Pure (Versioned, newVersioned, runVersionedT, debugLog)
-import Session (Session, newSession, undo)
+import Session (Session, newSession, undo, redo)
 import Session.Pure (runSessionT)
 
 main :: IO ()
@@ -28,7 +28,13 @@ main = do
       v3 <- snapshot
       replace Nil EHole
       v4 <- snapshot
-      pure [v1, v2, v3, v4]
+      undo
+      v5 <- snapshot
+      undo
+      v6 <- snapshot
+      redo
+      v7 <- snapshot
+      pure [v1, v2, v3, v4, v5, v6, v7]
   print v'
   print $ debugLog v'
   print s'
