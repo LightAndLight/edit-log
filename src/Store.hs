@@ -1,9 +1,11 @@
 {-# language GADTs #-}
+{-# language InstanceSigs, DefaultSignatures #-}
 module Store where
 
 import Control.Applicative (empty)
-import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
+import Control.Monad.State (StateT)
 import qualified Data.List as List
 
 import Path (Path(..), Level(..))
@@ -12,9 +14,18 @@ import Node (KnownHashType, Hash, Node(..), hashNode)
 
 class Monad m => MonadStore m where
   lookupNode :: Hash a -> m (Maybe (Node a))
+  default lookupNode :: (m ~ t n, MonadTrans t, MonadStore n) => Hash a -> m (Maybe (Node a))
+  lookupNode = lift . lookupNode
+
   lookupHash :: Node a -> m (Maybe (Hash a))
+  default lookupHash :: (m ~ t n, MonadTrans t, MonadStore n) => Node a -> m (Maybe (Hash a))
+  lookupHash = lift . lookupHash
 
   write :: Hash a -> Node a -> m ()
+  default write :: (m ~ t n, MonadTrans t, MonadStore n) => Hash a -> Node a -> m ()
+  write h = lift . write h
+
+instance MonadStore m => MonadStore (StateT s m)
 
 data SetH a b
   = SetH

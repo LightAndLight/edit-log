@@ -3,7 +3,9 @@ module Main where
 import Data.Foldable (traverse_)
 import Data.Functor.Identity (Identity(..))
 
+import qualified Log.Minimise as Minimise
 import Log (Time, Entry)
+import qualified Log
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), BinOp(..))
 import Versioned (replace, snapshot)
@@ -20,7 +22,7 @@ main = do
     s :: Session (Time, Entry Expr)
     s = newSession
 
-    Identity (vals, v', s') = runSessionT v s $ do
+    Identity ((diff, vals), v', s') = runSessionT v s $ do
       v1 <- snapshot
       replace (Cons BinOp_Left Nil) (Int 3)
       v2 <- snapshot
@@ -34,8 +36,11 @@ main = do
       v6 <- snapshot
       redo
       v7 <- snapshot
-      pure [v1, v2, v3, v4, v5, v6, v7]
+      es <- fmap snd <$> Log.getEntries
+      diff <- Minimise.toDiff es
+      pure (diff, [v1, v2, v3, v4, v5, v6, v7])
   print v'
   print $ debugLog v'
   print s'
+  print diff
   traverse_ print vals

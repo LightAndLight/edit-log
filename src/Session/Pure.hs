@@ -10,16 +10,17 @@ where
 import Control.Monad.State (StateT, runStateT, get, put)
 import Control.Monad.Trans.Class (lift)
 
-import Log (Time, Entry(..))
+import Log (Time, Entry(..), MonadLog)
 import Session (MonadSession(..), Session)
 import qualified Session
+import Store (MonadStore)
 import Versioned (MonadVersioned(..), replaceH)
 import Versioned.Pure (Versioned, VersionedT, runVersionedT)
 
 newtype SessionT a m b
   = SessionT
   { unSessionT :: StateT (Session (Time, Entry a)) (VersionedT a m) b }
-  deriving (Functor, Applicative, Monad)
+  deriving (Functor, Applicative, Monad, MonadLog a, MonadStore)
 
 runSessionT ::
   Monad m =>

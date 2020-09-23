@@ -1,16 +1,40 @@
 {-# language GADTs, KindSignatures #-}
 {-# language RankNTypes #-}
 {-# language StandaloneDeriving #-}
+{-# language TypeOperators #-}
+{-# options_ghc -fno-warn-overlapping-patterns #-}
 module Path where
 
+import Control.Monad (guard)
 import Data.Functor.Identity (Identity(..))
+import Data.Type.Equality ((:~:)(..))
 
 import Syntax (Expr(..), Statement(..), Block(..), Ident)
 
-data Path :: * -> * -> * where
+data Path a :: * -> * where
   Nil :: Path a a
   Cons :: Level a b -> Path b c -> Path a c
 deriving instance Show (Path a b)
+
+snoc :: Path a b -> Level b c -> Path a c
+snoc p l =
+  case p of
+    Nil -> Cons l Nil
+    Cons l' p' -> Cons l' (snoc p' l)
+
+eqPath :: Path a b -> Path a c -> Maybe (b :~: c)
+eqPath p1 p2 =
+  case p1 of
+    Nil ->
+      case p2 of
+        Nil -> Just Refl
+        Cons{} -> Nothing
+    Cons l p1' ->
+      case p2 of
+        Nil -> Nothing
+        Cons l' p2' -> do
+          Refl <- eqLevel l l'
+          eqPath p1' p2'
 
 data Level :: * -> * -> * where
   For_Ident :: Level Statement Ident
@@ -31,6 +55,60 @@ data Level :: * -> * -> * where
 
   Block_Index :: Int -> Level Block Statement
 deriving instance Show (Level a b)
+
+eqLevel :: Level a b -> Level a c -> Maybe (b :~: c)
+eqLevel l1 l2 =
+  case l1 of
+    For_Ident ->
+      case l2 of
+        For_Ident -> Just Refl
+        _ -> Nothing
+    For_Expr ->
+      case l2 of
+        For_Expr -> Just Refl
+        _ -> Nothing
+    For_Block ->
+      case l2 of
+        For_Block -> Just Refl
+        _ -> Nothing
+    IfThen_Cond ->
+      case l2 of
+        IfThen_Cond -> Just Refl
+        _ -> Nothing
+    IfThen_Then ->
+      case l2 of
+        IfThen_Then -> Just Refl
+        _ -> Nothing
+    IfThenElse_Cond ->
+      case l2 of
+        IfThenElse_Cond -> Just Refl
+        _ -> Nothing
+    IfThenElse_Then ->
+      case l2 of
+        IfThenElse_Then -> Just Refl
+        _ -> Nothing
+    IfThenElse_Else ->
+      case l2 of
+        IfThenElse_Else -> Just Refl
+        _ -> Nothing
+    BinOp_Left ->
+      case l2 of
+        BinOp_Left -> Just Refl
+        _ -> Nothing
+    BinOp_Right ->
+      case l2 of
+        BinOp_Right -> Just Refl
+        _ -> Nothing
+    UnOp_Value ->
+      case l2 of
+        UnOp_Value -> Just Refl
+        _ -> Nothing
+    Block_Index n ->
+      case l2 of
+        Block_Index n' -> do
+          guard $ n == n'
+          pure Refl
+        _ -> Nothing
 
 traversal :: Path a b -> forall f. Applicative f => (b -> f b) -> a -> f a
 traversal p f a =
