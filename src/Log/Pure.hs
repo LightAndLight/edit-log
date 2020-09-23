@@ -34,6 +34,8 @@ instance Monad m => MonadLog a (LogT a m) where
       l <- get
       let time = logTime l
       put $ Log { logTime = tick time, logEntries = (time, entry) : logEntries l }
+      pure time
 
+  getEntry t = LogT . gets $ lookup t . logEntries
   getPhysicalTime = LogT $ gets logTime
   getEntries = LogT . gets $ List.sortOn fst . logEntries

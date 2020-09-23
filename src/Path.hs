@@ -121,3 +121,25 @@ modify p f = runIdentity . traversal p (Identity . f)
 
 set :: Path a b -> b -> a -> a
 set p v = modify p (const v)
+
+showingLevelTarget :: Show a => Level a b -> (Show b => r) -> r
+showingLevelTarget l f =
+  case l of
+    For_Ident -> f
+    For_Expr -> f
+    For_Block -> f
+    IfThen_Cond -> f
+    IfThen_Then -> f
+    IfThenElse_Cond -> f
+    IfThenElse_Then -> f
+    IfThenElse_Else -> f
+    BinOp_Left -> f
+    BinOp_Right -> f
+    UnOp_Value -> f
+    Block_Index{} -> f
+
+showingPathTarget :: Show a => Path a b -> (Show b => r) -> r
+showingPathTarget path f =
+  case path of
+    Nil -> f
+    Cons l rest -> showingLevelTarget l (showingPathTarget rest f)

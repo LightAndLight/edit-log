@@ -11,12 +11,14 @@ newtype Ident = Ident String
 data Block
   = Block [Statement]
   | BHole
+  deriving Show
 
 data Statement
   = For Ident Expr Block
   | IfThen Expr Block
   | IfThenElse Expr Block Block
   | SHole
+  deriving Show
 
 data BinOp
   = Add

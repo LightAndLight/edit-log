@@ -24,7 +24,8 @@ data Entry a where
 deriving instance Show (Entry a)
 
 class Monad m => MonadLog a m | m -> a where
-  append :: Entry a -> m ()
+  append :: Entry a -> m Time
 
+  getEntry :: Time -> m (Maybe (Entry a))
   getEntries :: m [(Time, Entry a)]
   getPhysicalTime :: m Time

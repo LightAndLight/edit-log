@@ -3,10 +3,13 @@ module Main where
 import Data.Foldable (traverse_)
 import Data.Functor.Identity (Identity(..))
 
+import Log (Time, Entry)
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), BinOp(..))
 import Versioned (replace, snapshot)
-import Versioned.Pure (Versioned, newVersioned, runVersionedT)
+import Versioned.Pure (Versioned, newVersioned, runVersionedT, debugLog)
+import Session (Session, newSession, undo)
+import Session.Pure (runSessionT)
 
 main :: IO ()
 main = do
@@ -14,7 +17,10 @@ main = do
     v :: Versioned Expr
     v = newVersioned (BinOp Add (Int 1) (Int 2))
 
-    Identity (vals, v') = runVersionedT v $ do
+    s :: Session (Time, Entry Expr)
+    s = newSession
+
+    Identity (vals, v', s') = runSessionT v s $ do
       v1 <- snapshot
       replace (Cons BinOp_Left Nil) (Int 3)
       v2 <- snapshot
@@ -24,4 +30,6 @@ main = do
       v4 <- snapshot
       pure [v1, v2, v3, v4]
   print v'
+  print $ debugLog v'
+  print s'
   traverse_ print vals
