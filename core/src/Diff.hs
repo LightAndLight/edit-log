@@ -18,6 +18,15 @@ data Entry a where
   Entry :: Level a b -> Diff b -> Entry a
 deriving instance Show (Entry a)
 
+lookupEntry :: Level a b -> [Entry a] -> Maybe (Diff b)
+lookupEntry level entries =
+  case entries of
+    [] -> Nothing
+    Entry level' diff : rest ->
+      case eqLevel level level' of
+        Nothing -> lookupEntry level rest
+        Just Refl -> Just diff
+
 data Change a
   = Replace { changeOld :: Hash a, changeNew :: Hash a }
 deriving instance Show (Change a)
@@ -31,32 +40,34 @@ emptyDiff :: Diff a
 emptyDiff = Branch []
 
 insert :: MonadStore m => Path a b -> Change b -> Diff a -> m (Diff a)
-insert p change m =
+insert p c m =
   case p of
-    Nil -> pure $ Leaf change
+    Nil -> pure $ Leaf c
     Cons l p' ->
       case m of
-        Leaf changeOuter ->
-          case changeOuter of
+        Leaf cOuter ->
+          case cOuter of
             Replace old newOuter ->
-              case change of
+              case c of
                 Replace _ newInner -> do
                   m_res <- setH p (pure newInner) newOuter
                   pure $ case m_res of
                     Nothing -> m
                     Just res -> Leaf $ Replace old (Store.rootHash res)
-        Branch ms -> Branch <$> entriesInsert l p' change ms
+        Branch ms -> Branch <$> entriesInsert l p' c ms
   where
     entriesInsert :: MonadStore m => Level a b -> Path b c -> Change c -> [Entry a] -> m [Entry a]
-    entriesInsert level path hash entries =
+    entriesInsert level path change entries =
       case entries of
-        [] -> pure []
+        [] -> do
+          diff <- insert path change emptyDiff
+          pure [Entry level diff]
         entry@(Entry level' d) : rest ->
           case eqLevel level level' of
-            Nothing -> (entry :) <$> entriesInsert level path hash rest
+            Nothing -> (entry :) <$> entriesInsert level path change rest
             Just Refl ->
               (\m' -> Entry level m' : rest) <$>
-              insert path hash d
+              insert path change d
 
 traversal ::
   forall a b.
