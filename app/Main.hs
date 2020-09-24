@@ -3,7 +3,7 @@ module Main where
 import Data.Foldable (traverse_)
 import Data.Functor.Identity (Identity(..))
 
-import qualified Log.Minimise as Minimise
+import qualified Diff
 import Log (Time, Entry)
 import qualified Log
 import Path (Path(..), Level(..))
@@ -37,7 +37,7 @@ main = do
       redo
       v7 <- snapshot
       es <- fmap snd <$> Log.getEntries
-      diff <- Minimise.toDiff es
+      diff <- Diff.toDiff es
       pure (diff, [v1, v2, v3, v4, v5, v6, v7])
   print v'
   print $ debugLog v'

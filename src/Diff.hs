@@ -2,7 +2,7 @@
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving #-}
-module Log.Minimise where
+module Diff where
 
 import Data.Foldable (foldlM)
 import Data.Type.Equality ((:~:)(..))
