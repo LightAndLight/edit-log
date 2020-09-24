@@ -50,3 +50,5 @@ test-suite edit-log-core-test
   hs-source-dirs:      test
   main-is:             Main.hs
   build-depends:       base ^>=4.12.0.0
+                     , edit-log-core
+                     , hspec

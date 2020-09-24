@@ -1,11 +1,13 @@
 {-# language GADTs #-}
 {-# language InstanceSigs, DefaultSignatures #-}
+{-# language ScopedTypeVariables #-}
 module Store where
 
 import Control.Applicative (empty)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
 import Control.Monad.State (StateT)
+import Data.Function (on)
 import qualified Data.List as List
 
 import Path (Path(..), Level(..))
@@ -26,6 +28,93 @@ class Monad m => MonadStore m where
   write h = lift . write h
 
 instance MonadStore m => MonadStore (StateT s m)
+
+modifyH :: MonadStore m => Path a b -> (Hash b -> m (Hash b)) -> Hash a -> m (Maybe (Hash a))
+modifyH path_ f_ = runMaybeT . go path_ f_
+  where
+    go :: MonadStore m => Path a b -> (Hash b -> m (Hash b)) -> Hash a -> MaybeT m (Hash a)
+    go path f rooth =
+      case path of
+        Nil -> lift $ f rooth
+        Cons l rest -> do
+          n <- MaybeT $ lookupNode rooth
+          case l of
+            For_Ident -> empty
+            For_Expr ->
+              case n of
+                NFor ident exprh bodyh -> do
+                  exprh' <- go rest f exprh
+                  lift . addNode $ NFor ident exprh' bodyh
+                _ -> empty
+            For_Block ->
+              case n of
+                NFor ident exprh bodyh -> do
+                  bodyh' <- go rest f bodyh
+                  lift . addNode $ NFor ident exprh bodyh'
+                _ -> empty
+
+            IfThen_Cond ->
+              case n of
+                NIfThen condh then_h -> do
+                  condh' <- go rest f condh
+                  lift . addNode $ NIfThen condh' then_h
+                _ -> empty
+            IfThen_Then ->
+              case n of
+                NIfThen condh then_h -> do
+                  then_h' <- go rest f then_h
+                  lift . addNode $ NIfThen condh then_h'
+                _ -> empty
+
+            IfThenElse_Cond ->
+              case n of
+                NIfThenElse condh then_h else_h -> do
+                  condh' <- go rest f condh
+                  lift . addNode $ NIfThenElse condh' then_h else_h
+                _ -> empty
+            IfThenElse_Then ->
+              case n of
+                NIfThenElse condh then_h else_h -> do
+                  then_h' <- go rest f then_h
+                  lift . addNode $ NIfThenElse condh then_h' else_h
+                _ -> empty
+            IfThenElse_Else ->
+              case n of
+                NIfThenElse condh then_h else_h -> do
+                  else_h' <- go rest f else_h
+                  lift . addNode $ NIfThenElse condh then_h else_h'
+                _ -> empty
+
+            BinOp_Left ->
+              case n of
+                NBinOp op lefth righth -> do
+                  lefth' <- go rest f lefth
+                  lift . addNode $ NBinOp op lefth' righth
+                _ -> empty
+            BinOp_Right ->
+              case n of
+                NBinOp op lefth righth -> do
+                  righth' <- go rest f righth
+                  lift . addNode $ NBinOp op lefth righth'
+                _ -> empty
+
+            UnOp_Value -> do
+              case n of
+                NUnOp op valueh -> do
+                  valueh' <- go rest f valueh
+                  lift . addNode $ NUnOp op valueh'
+                _ -> empty
+
+            Block_Index ix -> do
+              case n of
+                NBlock sts | 0 <= ix && ix < length sts -> do
+                  let (prefix, more) = List.splitAt ix sts
+                  case more of
+                    [] -> error "impossible"
+                    elh : suffix -> do
+                      elh' <- go rest f elh
+                      lift . addNode $ NBlock (prefix ++ elh' : suffix)
+                _ -> empty
 
 data SetH a b
   = SetH
@@ -133,6 +222,55 @@ setH path_ val_ = runMaybeT . go path_ val_
                       rooth' <- lift . addNode $ NBlock (prefix ++ rootHash res : suffix)
                       pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
+
+{-
+
+insertAll [(0, [x, y])] [a, b] = [x, y, a, b]
+
+insertAll [(0, [x, y]), (1, [z, w])] [a, b] = [x, y, a, z, w, b]
+
+insertAll [(1, [z, w]), (0, [x, y])] [a, b] = [x, y, a, z, w, b]
+
+insertAll [(2, [z, w])] [a, b] = [a, b, z, w]
+
+-}
+insertAll :: forall b. b -> [(Int, [b])] -> [b] -> [b]
+insertAll def inserts bs =
+  -- support inserting at the tail of the list
+  if maxIx >= length fullBs
+  then resultsWithoutLast ++ maxEntries
+  else resultsWithoutLast
+
+  where
+    (maxIx, maxEntries) = List.maximumBy (compare `on` fst) inserts
+
+    -- if there are entries that occur after the end of the original list,
+    -- pad the end of the list with an appropriate number of holes
+    fullBs =
+      bs ++
+      replicate (maxIx - length bs) def
+
+    -- intersperse the entries at the appropriate index
+    resultsWithoutLast = do
+      (ix, b) <- zip [0..] fullBs
+      case lookup ix inserts of
+        Nothing -> pure b
+        Just moreBs -> moreBs ++ [b]
+
+insertH :: MonadStore m => Path a Block -> [(Int, [Hash Statement])] -> Hash a -> m (Maybe (Hash a))
+insertH path positions =
+  modifyH path $ \blockh -> do
+    m_node <- lookupNode blockh
+    case m_node of
+      Nothing -> error $ "missing node for " <> show blockh
+      Just block ->
+        case block of
+          NBlock sts -> do
+            sholeHash <- addNode NSHole
+            addNode . NBlock $ insertAll sholeHash positions sts
+          NBHole -> do
+            sholeHash <- addNode NSHole
+            addNode . NBlock $ insertAll sholeHash positions []
 
 addNode :: (KnownHashType a, MonadStore m) => Node a -> m (Hash a)
 addNode n = do
