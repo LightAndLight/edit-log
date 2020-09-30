@@ -145,10 +145,10 @@ insertPositionsBranchChange (InsertPositions positions) change =
         (positions >>= \(ix, ps) -> zip [ix..] ps)
 
 insert :: MonadStore m => Path a b -> LeafChange b -> Diff a -> m (Diff a)
-insert p c m =
+insert p c currentDiff =
   case p of
     Nil ->
-      case m of
+      case currentDiff of
         Branch m_branchChange ms ->
           case c of
             ReplaceLeaf{} -> pure $ Leaf c
@@ -161,22 +161,22 @@ insert p c m =
                   insertPositionsBranchChange positions branchChange
         Leaf{} -> pure $ Leaf c
     Cons l p' ->
-      case m of
-        Branch branchChange ms ->
-          case getEntry l ms of
-            Nothing ->
-              -- the path currently isn't in this diff
-              pure m
+      case currentDiff of
+        Branch branchChange entries ->
+          case getEntry l entries of
+            Nothing -> do
+              entry <- Entry l <$> insert p' c emptyDiff
+              pure $ Branch branchChange (entry : entries)
             Just m' -> do
               m'' <- insert p' c m'
-              let ms' = setEntry l m'' ms
-              pure $ Branch branchChange ms'
+              let entries' = setEntry l m'' entries
+              pure $ Branch branchChange entries'
         Leaf cOuter ->
           case cOuter of
             ReplaceLeaf old newOuter -> do
               m_newOuter' <- applyChange p c newOuter
               pure $ case m_newOuter' of
-                Nothing -> m
+                Nothing -> currentDiff
                 Just newOuter' -> Leaf $ ReplaceLeaf old newOuter'
             InsertLeaf positions ->
               case l of
@@ -189,7 +189,7 @@ insert p c m =
                     Just statementh -> do
                       m_statementh' <- applyChange p' c statementh
                       pure $ case m_statementh' of
-                        Nothing -> m
+                        Nothing -> currentDiff
                         Just statementh' ->
                           let
                             positions' = setPosition ix statementh' positions

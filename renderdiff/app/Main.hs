@@ -18,8 +18,7 @@ import Syntax (Expr(..), BinOp(..))
 import qualified Versioned
 import Versioned.Pure (Versioned, newVersioned, runVersionedT)
 
-main :: IO ()
-main = do
+arithmetic = do
   let
     initial :: Expr
     initial = BinOp Add (Int 1) (Int 2)
@@ -36,6 +35,32 @@ main = do
       pure (diff, diffHtml, es)
   print es
   print diff
+  pure diffHtml
+
+statement = do
+  let
+    initial :: Statement
+    initial =
+      For (Ident "x") EHole . Block $
+      [ SHole
+      ]
+
+    v :: Versioned Statement
+    v = newVersioned initial
+
+    Identity ((diff, diffHtml, es), _v') = runVersionedT v $ do
+      Versioned.insert (Cons For_Block Nil) (1, SHole)
+      es <- fmap snd <$> Log.getEntries
+      diff <- Diff.toDiff es
+      diffHtml <- Render.renderExprWithDiff initial diff
+      pure (diff, diffHtml, es)
+  print es
+  print diff
+  pure diffHtml
+
+main :: IO ()
+main = do
+  diffHtml <- forLoop
   LazyBS.writeFile "output.css" $
     LazyChar8.unlines
     [ ".diff-added {"

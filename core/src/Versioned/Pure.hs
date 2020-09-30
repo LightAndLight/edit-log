@@ -26,6 +26,7 @@ import qualified Path
 import Store (MonadStore, setH, addExpr, addStatement, addBlock, rebuild)
 import qualified Store
 import Store.Pure (StoreT, runStoreT, Store, newStore)
+import Syntax (Statement, Block)
 
 data Context a
   = Context
@@ -107,6 +108,9 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         t <- append entry
         VersionedT . modify $ \s -> s { root = Store.rootHash res }
         pure $ Just (t, entry)
+
+  insert :: Path a Block -> (Int, Statement) -> VersionedT a m (Maybe (Time, Entry a))
+  insert path (ix, st) = _
 
   snapshot = do
     m_res <- rebuild =<< VersionedT (gets root)
