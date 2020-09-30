@@ -1,28 +1,34 @@
+{-# language GADTs #-}
 {-# language OverloadedStrings #-}
+{-# language ScopedTypeVariables #-}
 module Render where
 
-import Data.Foldable (sequence_, traverse_)
+import Data.Foldable (sequence_, traverse_, for_)
+import Data.Function (on)
 import Data.Functor.Identity (runIdentity)
+import qualified Data.List as List
+import Data.Witherable (wither)
 import Text.Blaze.Html5 (Html, (!))
 import qualified Text.Blaze.Html5 as Html
 import qualified Text.Blaze.Html5.Attributes as Attr
 
 import Diff (Diff)
 import qualified Diff as Diff
+import Node (Hash)
 import Path (Level(..))
 import Store (MonadStore)
 import qualified Store
 import Syntax (Ident(..), Statement(..), Expr(..), Block(..), BinOp(..), UnOp(..))
 
-renderChange ::
+renderLeafChange ::
   MonadStore m =>
   Html.AttributeValue ->
-  Diff.Change a ->
+  Diff.LeafChange a ->
   (a -> Html) ->
   m Html
-renderChange nodeType change render =
+renderLeafChange nodeType change render =
   case change of
-    Diff.Replace oldh newh -> do
+    Diff.ReplaceLeaf oldh newh -> do
       m_old <- Store.rebuild oldh
       case m_old of
         Nothing -> error $ "failed to rebuild " <> show oldh
@@ -32,17 +38,37 @@ renderChange nodeType change render =
             Nothing -> error $ "failed to rebuild " <> show newh
             Just new ->
               pure $
-                Html.div ! Attr.class_ ("syntax-branch " <> nodeType <> " diff") $ do
-                  Html.div ! Attr.class_ "diff-removed" $ do
-                    render old
-                  Html.div ! Attr.class_ "diff-added" $ do
-                    render new
+              Html.div ! Attr.class_ ("syntax-branch " <> nodeType <> " diff") $ do
+                Html.div ! Attr.class_ "diff-removed" $ do
+                  render old
+                Html.div ! Attr.class_ "diff-added" $ do
+                  render new
+    Diff.InsertLeaf (Diff.InsertPositions positions) -> do
+      let
+        positions' :: [(Int, Hash Statement)]
+        positions' =
+          List.sortBy (compare `on` fst ) positions >>=
+          \(ix, vals) -> fmap (\(pos, val) -> (ix+pos, val)) (zip [0..] vals)
+
+      positions'' :: [(Int, Statement)] <-
+        wither
+          (\(ix, valh) -> do
+             m_val <- Store.rebuild valh
+             pure $ (,) ix <$> m_val
+          )
+          positions'
+      pure $
+        Html.div ! Attr.class_ ("syntax-branch " <> nodeType <> " diff") $ do
+          Html.div ! Attr.class_ "diff-added" $ do
+            for_ positions'' $ \(ix, val) -> do
+              Html.div ! Attr.class_ "diff-annotation" $ Html.toHtml (show ix)
+              renderStatement val
 
 renderBlockWithDiff :: MonadStore m => Block -> Diff Block -> m Html
 renderBlockWithDiff block diff =
   case diff of
-    Diff.Leaf change -> renderChange "block" change renderBlock
-    Diff.Branch entries ->
+    Diff.Leaf change -> renderLeafChange "block" change renderBlock
+    Diff.Branch branchChanges entries ->
       case block of
         BHole ->
           case entries of
@@ -52,7 +78,7 @@ renderBlockWithDiff block diff =
           htmls <-
             traverse
               (\(ix, st) ->
-                 case Diff.lookupEntry (Block_Index ix) entries of
+                 case Diff.getEntry (Block_Index ix) entries of
                    Nothing -> pure $ renderStatement st
                    Just diff' -> renderStatementWithDiff st diff'
               )
@@ -68,15 +94,15 @@ withDiff ::
   b ->
   m Html
 withDiff render renderWithDiff level entries val =
-  case Diff.lookupEntry level entries of
+  case Diff.getEntry level entries of
     Nothing -> pure $ render val
     Just diff' -> renderWithDiff val diff'
 
 renderStatementWithDiff :: MonadStore m => Statement -> Diff Statement -> m Html
 renderStatementWithDiff statement diff =
   case diff of
-    Diff.Leaf change -> renderChange "statement" change renderStatement
-    Diff.Branch entries ->
+    Diff.Leaf change -> renderLeafChange "statement" change renderStatement
+    Diff.Branch branchChanges entries ->
       case statement of
         For ident expr body ->
           renderStatement_For
@@ -108,8 +134,8 @@ renderStatementWithDiff statement diff =
 renderExprWithDiff :: MonadStore m => Expr -> Diff Expr -> m Html
 renderExprWithDiff expr diff =
   case diff of
-    Diff.Leaf change -> renderChange "expr" change renderExpr
-    Diff.Branch entries ->
+    Diff.Leaf change -> renderLeafChange "expr" change renderExpr
+    Diff.Branch branchChanges entries ->
       case expr of
         Bool b ->
           case entries of
@@ -139,8 +165,8 @@ renderExprWithDiff expr diff =
 renderIdentWithDiff :: MonadStore m => Ident -> Diff Ident -> m Html
 renderIdentWithDiff ident diff =
   case diff of
-    Diff.Leaf change -> renderChange "ident" change renderIdent
-    Diff.Branch entries ->
+    Diff.Leaf change -> renderLeafChange "ident" change renderIdent
+    Diff.Branch branchChanges entries ->
       case entries of
         [] -> pure $ renderIdent ident
         _:_ -> error "there's no Level that can walk into an Ident"
