@@ -73,7 +73,6 @@ data Node :: * -> * where
 
   NBlock :: [Hash Statement] -> Node Block
 
-  NBHole :: Node Block
   NSHole :: Node Statement
   NEHole :: Node Expr
 deriving instance Show (Node a)
@@ -137,10 +136,6 @@ eqNode n1 n2 =
           traverse_ (uncurry eqHash) (zip sts sts')
           pure Refl
         _ -> Nothing
-    NBHole ->
-      case n2 of
-        NBHole -> Just Refl
-        _ -> Nothing
     NSHole ->
       case n2 of
         NSHole -> Just Refl
@@ -170,9 +165,8 @@ instance Hashable (Node a) where
 
       NBlock sts -> hashWithSalt s (7::Int, sts)
 
-      NBHole -> hashWithSalt s (8::Int)
-      NSHole -> hashWithSalt s (9::Int)
-      NEHole -> hashWithSalt s (10::Int)
+      NSHole -> hashWithSalt s (8::Int)
+      NEHole -> hashWithSalt s (9::Int)
 
 hashNode :: forall a. KnownHashType a => Node a -> Hash a
 hashNode n =
@@ -188,6 +182,5 @@ hashNode n =
 
     NBlock{} -> HBlock $ hash n
 
-    NBHole -> HBlock $ hash n
     NSHole -> HStatement $ hash n
     NEHole -> HExpr $ hash n

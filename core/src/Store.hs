@@ -268,9 +268,6 @@ insertH path positions =
           NBlock sts -> do
             sholeHash <- addNode NSHole
             addNode . NBlock $ insertAll sholeHash positions sts
-          NBHole -> do
-            sholeHash <- addNode NSHole
-            addNode . NBlock $ insertAll sholeHash positions []
 
 addNode :: (KnownHashType a, MonadStore m) => Node a -> m (Hash a)
 addNode n = do
@@ -314,7 +311,6 @@ rebuild = runMaybeT . go
             NBlock sts ->
               Block <$> traverse go sts
 
-            NBHole -> pure BHole
             NSHole -> pure SHole
             NEHole -> pure EHole
 
@@ -356,4 +352,3 @@ addBlock b =
     Block sts -> do
       stsh <- traverse addStatement sts
       addNode $ NBlock stsh
-    BHole -> addNode NBHole

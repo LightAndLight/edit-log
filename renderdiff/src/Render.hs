@@ -70,10 +70,6 @@ renderBlockWithDiff block diff =
     Diff.Leaf change -> renderLeafChange "block" change renderBlock
     Diff.Branch branchChanges entries ->
       case block of
-        BHole ->
-          case entries of
-            [] -> pure renderBHole
-            _:_ -> error "there's no Level that can walk into a BHole"
         Block sts -> do
           htmls <-
             traverse
@@ -352,15 +348,9 @@ renderExpr expr =
         value
     EHole -> renderEHole
 
-renderBHole :: Html
-renderBHole =
-  Html.div ! Attr.class_ "syntax-leaf block hole" $ do
-    pure ()
-
 renderBlock :: Block -> Html
 renderBlock block =
   case block of
-    BHole -> renderBHole
     Block sts ->
       Html.div ! Attr.class_ "syntax-branch block" $ do
         traverse_ renderStatement sts

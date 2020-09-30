@@ -8,9 +8,8 @@ import GHC.Generics (Generic)
 newtype Ident = Ident String
   deriving (Eq, Hashable, Show)
 
-data Block
+newtype Block
   = Block [Statement]
-  | BHole
   deriving Show
 
 data Statement
