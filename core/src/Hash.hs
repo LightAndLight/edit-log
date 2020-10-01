@@ -10,10 +10,11 @@ module Hash
   )
 where
 
-import Control.Monad (guard)
 import Data.Hashable (Hashable(..))
+import Data.GADT.Compare (geq)
+import Data.GADT.Compare.TH (deriveGEq)
 import Data.GADT.Show.TH (deriveGShow)
-import Data.Type.Equality ((:~:)(Refl))
+import Data.Type.Equality ((:~:))
 
 import NodeType (NodeType(..))
 import Syntax (Block, Expr, Statement)
@@ -23,32 +24,14 @@ data Hash :: * -> * where
   HStatement :: Int -> Hash Statement
   HBlock :: Int -> Hash Block
 deriveGShow ''Hash
+deriveGEq ''Hash
 deriving instance Show (Hash a)
 
 instance Hashable (Hash a) where; hashWithSalt s = hashWithSalt s . unHash
 instance Eq (Hash a) where; h1 == h2 = unHash h1 == unHash h2
 
 eqHash :: Hash a -> Hash b -> Maybe (a :~: b)
-eqHash h1 h2 =
-  case h1 of
-    HExpr n ->
-      case h2 of
-        HExpr n' -> do
-          guard (n == n')
-          pure Refl
-        _ -> Nothing
-    HStatement n ->
-      case h2 of
-        HStatement n' -> do
-          guard (n == n')
-          pure Refl
-        _ -> Nothing
-    HBlock n ->
-      case h2 of
-        HBlock n' -> do
-          guard (n == n')
-          pure Refl
-        _ -> Nothing
+eqHash = geq
 
 mkHash :: NodeType a -> Int -> Hash a
 mkHash nt h =

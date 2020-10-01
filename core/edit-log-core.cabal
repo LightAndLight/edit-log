@@ -26,6 +26,7 @@ library
                      , Session.Pure
                      , Store
                      , Store.Pure
+                     , Store.Pure.Internal
                      , Syntax
                      , Versioned
                      , Versioned.Pure
@@ -34,6 +35,7 @@ library
                      , dependent-sum-template
                      , hashable
                      , mtl
+                     , some
                      , transformers >= 0.5
                      , unordered-containers
   hs-source-dirs:      src
@@ -53,9 +55,13 @@ test-suite edit-log-core-test
   hs-source-dirs:      test
   other-modules:
                        Gen.Hash
+                       Gen.Ident
+                     , Gen.Node
                      , Gen.NodeType
+                     , Gen.Syntax
                      , Test.Hash
                      , Test.NodeType
+                     , Test.Store.Pure
   main-is:             Main.hs
   build-depends:       base ^>=4.12.0.0
                      , edit-log-core
@@ -63,3 +69,4 @@ test-suite edit-log-core-test
                      , hspec-hedgehog
                      , hedgehog
                      , some
+  ghc-options:         -Wall -Werror

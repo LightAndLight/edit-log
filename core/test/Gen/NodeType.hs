@@ -1,6 +1,8 @@
 {-# language GADTs #-}
+{-# language StandaloneDeriving #-}
 module Gen.NodeType
-  ( genNodeType
+  ( SomeNodeType(..)
+  , genNodeType
   , genEqualNodeType
   , genEqualNodeTypes
   )
@@ -10,10 +12,14 @@ import Data.Some (Some(..))
 import Hedgehog (Gen)
 import qualified Hedgehog.Gen as Gen
 
-import NodeType (NodeType(..))
+import NodeType (KnownNodeType, NodeType(..))
 
-genNodeType :: Gen (Some NodeType)
-genNodeType = Gen.element [Some TBlock, Some TExpr, Some TStatement]
+data SomeNodeType where
+  SomeNodeType :: KnownNodeType a => NodeType a -> SomeNodeType
+deriving instance Show SomeNodeType
+
+genNodeType :: Gen SomeNodeType
+genNodeType = Gen.element [SomeNodeType TBlock, SomeNodeType TExpr, SomeNodeType TStatement]
 
 genEqualNodeType :: Some NodeType -> Gen (Some NodeType)
 genEqualNodeType (Some ty) =

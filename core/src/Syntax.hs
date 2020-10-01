@@ -27,14 +27,14 @@ data BinOp
 
   | Or
   | And
-  deriving (Eq, Generic, Show)
+  deriving (Eq, Generic, Show, Enum, Bounded)
 instance Hashable BinOp
 
 data UnOp
   = Neg
 
   | Not
-  deriving (Eq, Generic, Show)
+  deriving (Eq, Generic, Show, Enum, Bounded)
 instance Hashable UnOp
 
 data Expr

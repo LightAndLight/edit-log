@@ -4,6 +4,7 @@ import Test.Hspec
 
 import Test.Hash (hashSpec)
 import Test.NodeType (nodeTypeSpec)
+import Test.Store.Pure (storePureSpec)
 
 import qualified Store
 
@@ -12,6 +13,7 @@ main =
   hspec $ do
     hashSpec
     nodeTypeSpec
+    storePureSpec
     describe "Store.insertAll" $ do
       it "insertAll [(0, [x, y])] [a, b] = [x, y, a, b]" $ do
         Store.insertAll '_' [(0, "xy")] "ab" `shouldBe` "xyab"

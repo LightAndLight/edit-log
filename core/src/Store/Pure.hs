@@ -1,8 +1,6 @@
 {-# language GeneralizedNewtypeDeriving #-}
 {-# language GADTs #-}
 {-# language RankNTypes #-}
-{-# language QuantifiedConstraints, UndecidableInstances #-}
-{-# language StandaloneDeriving #-}
 {-# language TypeOperators #-}
 module Store.Pure
   ( StoreT
@@ -16,13 +14,10 @@ import Control.Monad.State (StateT, runStateT, get, modify)
 import Control.Monad.Trans.Class (MonadTrans(..))
 import Data.Type.Equality ((:~:)(Refl))
 
-import Hash (Hash, eqHash)
-import Node (Node, eqNode)
+import Hash (eqHash)
+import Node (eqNode, hashNode)
 import Store (MonadStore(..))
-
-data Entry f g where
-  Entry :: f a -> g a -> Entry f g
-deriving instance (forall x. Show (f x), forall y. Show (g y)) => Show (Entry f g)
+import Store.Pure.Internal
 
 lookupEntry ::
   (forall a b. f a -> f b -> Maybe (a :~: b)) ->
@@ -36,12 +31,6 @@ lookupEntry eq k entries =
       case eq k k' of
         Nothing -> lookupEntry eq k rest
         Just Refl -> Just v
-
-data Store
-  = Store
-  { forward :: [Entry Hash Node]
-  , backward :: [Entry Node Hash]
-  } deriving Show
 
 newStore :: Store
 newStore = Store [] []
@@ -63,14 +52,19 @@ instance Monad m => MonadStore (StoreT m) where
     StoreT $ do
       ctx <- get
       pure $ lookupEntry eqNode n (backward ctx)
-  write h n = do
+  addNode n = do
+    let h = hashNode n
     m_n' <- lookupNode h
     StoreT $ do
       case m_n' of
         Just n' ->
           if n == n'
           then pure ()
-          else error "hash collision"
+          else
+            error $
+            "tried to associate " <> show h <>
+            " with " <> show n <>
+            ", but that hash is already associated with " <> show n'
         Nothing -> modify $ \s -> s { forward = Entry h n : forward s }
     m_h' <- lookupHash n
     StoreT $ do
@@ -78,5 +72,10 @@ instance Monad m => MonadStore (StoreT m) where
         Just h' ->
           if h == h'
           then pure ()
-          else error "writing node with inconsistent hash"
+          else
+            error $
+            "tried to associate " <> show n <>
+            " with " <> show h <>
+            ", but that node is already associated with " <> show h'
         Nothing -> modify $ \s -> s { backward = Entry n h : backward s }
+    pure h

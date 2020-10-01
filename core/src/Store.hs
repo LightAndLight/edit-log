@@ -11,7 +11,7 @@ import Data.Function (on)
 import qualified Data.List as List
 
 import Hash (Hash)
-import Node (Node(..), hashNode)
+import Node (Node(..))
 import NodeType (KnownNodeType)
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), Statement(..), Block(..))
@@ -25,9 +25,9 @@ class Monad m => MonadStore m where
   default lookupHash :: (m ~ t n, MonadTrans t, MonadStore n) => Node a -> m (Maybe (Hash a))
   lookupHash = lift . lookupHash
 
-  write :: Hash a -> Node a -> m ()
-  default write :: (m ~ t n, MonadTrans t, MonadStore n) => Hash a -> Node a -> m ()
-  write h = lift . write h
+  addNode :: KnownNodeType a => Node a -> m (Hash a)
+  default addNode :: (m ~ t n, MonadTrans t, MonadStore n, KnownNodeType a) => Node a -> m (Hash a)
+  addNode = lift . addNode
 
 instance MonadStore m => MonadStore (StateT s m)
 
@@ -270,12 +270,6 @@ insertH path positions =
           NBlock sts -> do
             sholeHash <- addNode NSHole
             addNode . NBlock $ insertAll sholeHash positions sts
-
-addNode :: (KnownNodeType a, MonadStore m) => Node a -> m (Hash a)
-addNode n = do
-  let h = hashNode n
-  write h n
-  pure h
 
 rebuild :: MonadStore m => Hash a -> m (Maybe a)
 rebuild = runMaybeT . go

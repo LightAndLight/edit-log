@@ -1,6 +1,7 @@
 {-# language GADTs #-}
 module Gen.Hash
-  ( genHash
+  ( genHashOf
+  , genHash
   , genEqualHash
   , genEqualHashes
   )
@@ -11,19 +12,26 @@ import Hedgehog (Gen)
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 
+import Gen.NodeType (SomeNodeType(..), genNodeType)
+
 import Hash (Hash(..))
+import NodeType (NodeType(..))
 
 genInt :: Gen Int
 genInt = Gen.int (Range.constant minBound maxBound)
 
+genHashOf :: NodeType a -> Gen (Hash a)
+genHashOf ty = do
+  n <- genInt
+  pure $ case ty of
+    TBlock -> HBlock n
+    TExpr -> HExpr n
+    TStatement -> HStatement n
+
 genHash :: Gen (Some Hash)
 genHash = do
-  n <- genInt
-  Gen.element
-    [ Some $ HBlock n
-    , Some $ HExpr n
-    , Some $ HStatement n
-    ]
+  SomeNodeType ty <- genNodeType
+  Some <$> genHashOf ty
 
 genEqualHash :: Some Hash -> Gen (Some Hash)
 genEqualHash h = pure h
