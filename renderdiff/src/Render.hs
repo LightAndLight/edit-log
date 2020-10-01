@@ -269,8 +269,7 @@ renderIdent (Ident ident) =
 
 renderSHole :: Html
 renderSHole =
-  Html.div ! Attr.class_ "syntax-leaf statement hole" $ do
-    pure ()
+  Html.div ! Attr.class_ "syntax-leaf statement hole" $ "_"
 
 renderStatement_For ::
   Monad m =>
@@ -380,8 +379,7 @@ renderUnOp op =
 
 renderEHole :: Html
 renderEHole =
-  Html.div ! Attr.class_ "syntax-leaf expression hole" $ do
-    pure ()
+  Html.div ! Attr.class_ "syntax-leaf expression hole" $ "_"
 
 renderExpr_Bool :: Bool -> Html
 renderExpr_Bool b =
