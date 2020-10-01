@@ -14,7 +14,7 @@ import qualified Log
 import qualified Render
 import Path (Path(..), Level(..))
 import qualified Store
-import Syntax (Expr(..), BinOp(..))
+import Syntax (Expr(..), BinOp(..), Statement(..), Block(..), Ident(..))
 import qualified Versioned
 import Versioned.Pure (Versioned, newVersioned, runVersionedT)
 
@@ -37,7 +37,7 @@ arithmetic = do
   print diff
   pure diffHtml
 
-statement = do
+forLoop = do
   let
     initial :: Statement
     initial =
@@ -52,7 +52,7 @@ statement = do
       Versioned.insert (Cons For_Block Nil) (1, SHole)
       es <- fmap snd <$> Log.getEntries
       diff <- Diff.toDiff es
-      diffHtml <- Render.renderExprWithDiff initial diff
+      diffHtml <- Render.renderStatementWithDiff initial diff
       pure (diff, diffHtml, es)
   print es
   print diff

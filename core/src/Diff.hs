@@ -4,7 +4,9 @@
 {-# language StandaloneDeriving #-}
 module Diff where
 
-import Data.Foldable (foldlM)
+import Data.Foldable (foldlM, foldl')
+import Data.Function (on)
+import qualified Data.List as List
 import Data.Type.Equality ((:~:)(..))
 
 import qualified Log
@@ -226,6 +228,9 @@ toDiff =
        case entry of
          Log.Replace path old new ->
            insert path (ReplaceLeaf old new) acc
+         Log.Insert path ix new ->
+           insert path (InsertLeaf $ InsertPositions [(ix, [new])]) acc
+         Log.Delete path ix old -> error "TODO: translate Delete into diff entry" path ix old
     )
     emptyDiff
 
@@ -238,7 +243,15 @@ fromDiff = go Nil
         Leaf change ->
           case change of
             ReplaceLeaf old new -> [Log.Replace path old new]
-            InsertLeaf positions -> error "TODO: translate Insert into log entry" positions
+            InsertLeaf (InsertPositions positions) ->
+              -- the log entries appear in reverse, because inserting the very last 'position'
+              -- first doesn't invalidate the indices of all the other inserts
+              foldl'
+                (\res (curIx, vals) ->
+                  foldl (\vs v -> Log.Insert path curIx v : vs) res vals
+                )
+                []
+                (List.sortBy (compare `on` fst) positions)
         Branch branchChange entries ->
           foldMap
             (\change ->

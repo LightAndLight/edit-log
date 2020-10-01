@@ -15,6 +15,7 @@ class Monad m => MonadVersioned a m | m -> a where
   replaceH :: Path a b -> Hash b -> m (Maybe (Time, Entry a))
 
   insert :: Path a Block -> (Int, Statement) -> m (Maybe (Time, Entry a))
+  insertH :: Path a Block -> (Int, Hash Statement) -> m (Maybe (Time, Entry a))
 
   snapshot :: m (Time, a)
 
@@ -23,5 +24,6 @@ instance MonadVersioned a m => MonadVersioned a (StateT s m) where
   replaceH p h = lift $ replaceH p h
 
   insert p a = lift $ insert p a
+  insertH p a = lift $ insertH p a
 
   snapshot = lift snapshot

@@ -11,6 +11,7 @@ import Control.Monad.Trans.Class (MonadTrans, lift)
 import Node (Hash)
 import Path (Path)
 import Store.Pure (StoreT)
+import Syntax (Block, Statement)
 
 newtype Time = Time Int
   deriving (Eq, Ord, Show)
@@ -26,6 +27,16 @@ data Entry a where
     Path a b ->
     Hash b -> -- old
     Hash b -> -- new
+    Entry a
+  Insert ::
+    Path a Block ->
+    Int ->
+    Hash Statement -> -- new
+    Entry a
+  Delete ::
+    Path a Block ->
+    Int ->
+    Hash Statement -> -- old
     Entry a
 deriving instance Show (Entry a)
 

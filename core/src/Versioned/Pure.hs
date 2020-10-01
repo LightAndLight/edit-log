@@ -23,7 +23,7 @@ import Log (MonadLog, Time, Entry(..), append, getEntries, getPhysicalTime)
 import Log.Pure (LogT, runLogT, Log, newLog)
 import Path (Path(..))
 import qualified Path
-import Store (MonadStore, setH, addExpr, addStatement, addBlock, rebuild)
+import Store (MonadStore, addExpr, addStatement, addBlock, rebuild)
 import qualified Store
 import Store.Pure (StoreT, runStoreT, Store, newStore)
 import Syntax (Statement, Block)
@@ -48,6 +48,8 @@ data Versioned a = Versioned Store (Log a) (Context a)
 
 data DebugEntry a where
   DebugReplace :: Show b => Path a b -> b -> b -> DebugEntry a
+  DebugInsert :: Path a Block -> Int -> Statement -> DebugEntry a
+  DebugDelete :: Path a Block -> Int -> Statement -> DebugEntry a
 deriving instance Show (DebugEntry a)
 
 debugLog :: Show a => Versioned a -> [(Time, DebugEntry a)]
@@ -64,6 +66,20 @@ debugLog (Versioned s l _) = (fmap.fmap) f entries
               (Nothing, _) -> error "impossible"
               (_, Nothing) -> error "impossible"
               (Just old, Just new) -> Path.showingPathTarget path (DebugReplace path old new)
+        Insert path ix newh ->
+          let
+            Identity (m_new, _) = runStoreT s $ rebuild newh
+          in
+            case m_new of
+              Nothing -> error "impossible"
+              Just new -> Path.showingPathTarget path (DebugInsert path ix new)
+        Delete path ix oldh ->
+          let
+            Identity (m_old, _) = runStoreT s $ rebuild oldh
+          in
+            case m_old of
+              Nothing -> error "impossible"
+              Just old -> Path.showingPathTarget path (DebugDelete path ix old)
     Identity (entries, _) = runLogT l getEntries
 
 newVersioned :: forall a. KnownHashType a => a -> Versioned a
@@ -82,7 +98,7 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
   replace path value = do
     rooth <- VersionedT $ gets root
     m_res <-
-      setH
+      Store.setH
         path
         (case hashType @b of
             TExpr -> addExpr value
@@ -100,7 +116,7 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
 
   replaceH path valueh = do
     rooth <- VersionedT $ gets root
-    m_res <- setH path (pure valueh) rooth
+    m_res <- Store.setH path (pure valueh) rooth
     case m_res of
       Nothing -> pure Nothing
       Just res -> do
@@ -110,7 +126,21 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         pure $ Just (t, entry)
 
   insert :: Path a Block -> (Int, Statement) -> VersionedT a m (Maybe (Time, Entry a))
-  insert path (ix, st) = _
+  insert path (ix, st) = do
+    sth <- addStatement st
+    insertH path (ix, sth)
+
+  insertH :: Path a Block -> (Int, Hash Statement) -> VersionedT a m (Maybe (Time, Entry a))
+  insertH path (ix, sth) = do
+    rooth <- VersionedT $ gets root
+    m_rooth' <- Store.insertH path [(ix, [sth])] rooth
+    case m_rooth' of
+      Nothing -> pure Nothing
+      Just rooth' -> do
+        let entry = Insert path ix sth
+        t <- append entry
+        VersionedT $ modify $ \s -> s { root = rooth' }
+        pure $ Just (t, entry)
 
   snapshot = do
     m_res <- rebuild =<< VersionedT (gets root)
