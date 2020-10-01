@@ -9,18 +9,9 @@ import Data.Hashable (Hashable(..))
 import Data.Type.Equality ((:~:)(Refl))
 
 import Hash (Hash(..), eqHash)
+import NodeType (KnownNodeType)
 import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident)
 
-data NodeType :: * -> * where
-  TExpr :: NodeType Expr
-  TStatement :: NodeType Statement
-  TBlock :: NodeType Block
-
-class KnownNodeType t where; nodeType :: NodeType t
-
-instance KnownNodeType Expr where; nodeType = TExpr
-instance KnownNodeType Statement where; nodeType = TStatement
-instance KnownNodeType Block where; nodeType = TBlock
 data Node :: * -> * where
   NFor :: Ident -> Hash Expr -> Hash Block -> Node Statement
   NIfThen :: Hash Expr -> Hash Block -> Node Statement

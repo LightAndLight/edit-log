@@ -18,7 +18,7 @@ import Control.Monad.State (StateT, runStateT, gets, modify)
 import Data.Functor.Identity (Identity(..))
 
 import Hash (Hash)
-import Node (KnownNodeType, NodeType(..), nodeType)
+import NodeType (KnownNodeType, NodeType(..), nodeType)
 import Versioned (MonadVersioned(..))
 import Log (MonadLog, Time, Entry(..), append, getEntries, getPhysicalTime)
 import Log.Pure (LogT, runLogT, Log, newLog)

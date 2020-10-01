@@ -1,24 +1,32 @@
 {-# language GADTs, KindSignatures #-}
 {-# language StandaloneDeriving #-}
+{-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
 module Hash
   ( Hash(..)
   , eqHash
+  , mkHash
   , unHash
   )
 where
 
 import Control.Monad (guard)
 import Data.Hashable (Hashable(..))
+import Data.GADT.Show.TH (deriveGShow)
 import Data.Type.Equality ((:~:)(Refl))
 
+import NodeType (NodeType(..))
 import Syntax (Block, Expr, Statement)
 
 data Hash :: * -> * where
   HExpr :: Int -> Hash Expr
   HStatement :: Int -> Hash Statement
   HBlock :: Int -> Hash Block
+deriveGShow ''Hash
 deriving instance Show (Hash a)
+
+instance Hashable (Hash a) where; hashWithSalt s = hashWithSalt s . unHash
+instance Eq (Hash a) where; h1 == h2 = unHash h1 == unHash h2
 
 eqHash :: Hash a -> Hash b -> Maybe (a :~: b)
 eqHash h1 h2 =
@@ -42,11 +50,12 @@ eqHash h1 h2 =
           pure Refl
         _ -> Nothing
 
-instance Hashable (Hash a) where
-  hashWithSalt s = hashWithSalt s . unHash
-
-instance Eq (Hash a) where
-  h1 == h2 = unHash h1 == unHash h2
+mkHash :: NodeType a -> Int -> Hash a
+mkHash nt h =
+  case nt of
+    TExpr -> HExpr h
+    TStatement -> HStatement h
+    TBlock -> HBlock h
 
 unHash :: Hash a -> Int
 unHash h =

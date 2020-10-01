@@ -7,7 +7,7 @@ import Control.Monad.Trans.Class (lift)
 
 import Hash (Hash)
 import Log (Time, Entry)
-import Node (KnownNodeType)
+import NodeType (KnownNodeType)
 import Path (Path)
 import Syntax (Statement, Block)
 

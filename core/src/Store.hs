@@ -11,7 +11,8 @@ import Data.Function (on)
 import qualified Data.List as List
 
 import Hash (Hash)
-import Node (KnownNodeType, Node(..), hashNode)
+import Node (Node(..), hashNode)
+import NodeType (KnownNodeType)
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), Statement(..), Block(..))
 
