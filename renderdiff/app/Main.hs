@@ -65,12 +65,36 @@ main = do
   diffHtml <- forLoop
   LazyBS.writeFile "output.css" $
     LazyChar8.unlines
-    [ ".diff-added {"
-    , "  background-color: green;"
+    -- red: #fc7870
+    -- green: #6eb05d
+    [ "html {"
+    , "  font-family: 'Source Code Pro', monospace;"
+    , "}"
+    , ""
+    , ".diff-top {"
+    , "  border: 0px solid transparent;"
+    , "  border-top-left-radius: 1em;"
+    , "  border-top-right-radius: 1em;"
+    , "}"
+    , ""
+    , ".diff-bottom {"
+    , "  border: 0px solid transparent;"
+    , "  border-bottom-left-radius: 1em;"
+    , "  border-bottom-right-radius: 1em;"
+    , "}"
+    , ""
+    , ".diff-insert {"
+    , "  border: 0px solid transparent;"
+    , "  border-radius: 1em;"
+    , "}"
+    , ""
+    , ".diff-added {"
+    , "  background-color: #6eb05d;" -- green
     , "}"
     , ""
     , ".diff-removed {"
-    , "  background-color: red;"
+    , "  border: 0px solid transparent;"
+    , "  background-color: #fc7870;" -- red
     , "}"
     , ""
     , ".syntax-line {"
@@ -84,8 +108,32 @@ main = do
     , "  flex-direction: row;"
     , "}"
     , ""
+    , ".syntax-branch {"
+    , "  border: 0px solid transparent;"
+    , "  border-radius: 1em;"
+    , "  display: inline-block;"
+    , "}"
+    , ""
     , ".syntax-leaf {"
+    , "  border: 0px solid transparent;"
+    , "  border-radius: 1em;"
+    , "}"
+    , ""
+    , ".syntax-line {"
     , "  padding: 1em;"
+    , "}"
+    , ""
+    , ".syntax-line > .syntax-leaf {"
+    , "  padding-left: 1em;"
+    , "  padding-right: 1em;"
+    , "}"
+    , ""
+    , ".statement + .statement {"
+    , "  margin-top: 1em;"
+    , "}"
+    , ""
+    , ".block {"
+    , "  padding-left: 3em;"
     , "}"
     ]
   LazyBS.writeFile "output.html" . Blaze.renderHtml $ do
@@ -93,6 +141,9 @@ main = do
       Html.head $ do
         Html.meta ! Attr.charset "UTF-8"
         Html.link ! Attr.rel "stylesheet" ! Attr.href "output.css"
+        Html.link !
+          Attr.href "https://fonts.googleapis.com/css2?family=Source+Code+Pro&display=swap" !
+          Attr.rel "stylesheet"
         Html.title "renderdiff"
       Html.body $
         diffHtml

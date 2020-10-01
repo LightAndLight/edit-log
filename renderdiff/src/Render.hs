@@ -23,8 +23,8 @@ import Syntax (Ident(..), Statement(..), Expr(..), Block(..), BinOp(..), UnOp(..
 
 renderInsertedStatement :: (Int, Statement) -> Html
 renderInsertedStatement (_, new) =
-  Html.div ! Attr.class_ ("syntax-branch statement diff") $ do
-    Html.div ! Attr.class_ "diff-added" $ do
+  Html.div ! Attr.class_ ("diff statement") $ do
+    Html.div ! Attr.class_ "diff-added diff-insert" $ do
       renderStatement new
 
 renderLeafChange ::
@@ -46,10 +46,10 @@ renderLeafChange nodeType change item render =
             Nothing -> error $ "failed to rebuild " <> show newh
             Just new ->
               pure $
-              Html.div ! Attr.class_ ("syntax-branch " <> nodeType <> " diff") $ do
-                Html.div ! Attr.class_ "diff-removed" $ do
+              Html.div ! Attr.class_ ("diff " <> nodeType) $ do
+                Html.div ! Attr.class_ "diff-removed diff-top" $ do
                   render old
-                Html.div ! Attr.class_ "diff-added" $ do
+                Html.div ! Attr.class_ "diff-added diff-bottom" $ do
                   render new
     Diff.InsertLeaf (Diff.InsertPositions positions) | Block statements <- item -> do
       let
@@ -93,6 +93,22 @@ renderLeafChange nodeType change item render =
                 renderStatement $ snd old
                 overlayPositions news oldRest
 
+renderBlock_Statements :: Monad m => ([Statement] -> m Html) -> [Statement] -> m Html
+renderBlock_Statements fSts sts = do
+  stsHtml <- fSts sts
+  pure $
+    Html.div ! Attr.class_ "syntax-branch block" $ do
+      stsHtml
+
+renderBlock :: Block -> Html
+renderBlock block =
+  case block of
+    Block sts ->
+      runIdentity $
+      renderBlock_Statements
+        (pure . traverse_ renderStatement)
+        sts
+
 renderBlockWithDiff :: forall m. MonadStore m => Block -> Diff Block -> m Html
 renderBlockWithDiff block diff =
   case diff of
@@ -101,40 +117,44 @@ renderBlockWithDiff block diff =
       renderLeafChange "block" change block renderBlock
     Diff.Branch m_branchChange entries ->
       case block of
-        Block sts ->
-          case m_branchChange of
-            Nothing -> do
-              htmls <-
-                traverse
-                  (renderStatementIndexed entries)
-                  (zip [0::Int ..] sts)
-              pure $ sequence_ htmls
-            Just branchChange ->
-              case branchChange of
-                Diff.InsertBranch (Diff.InsertPositions positions) -> do
-                  let
-                    positions' :: [(Int, Hash Statement)]
-                    positions' =
-                      List.sortBy (compare `on` fst ) positions >>=
-                      \(ix, vals) -> fmap (\(pos, val) -> (ix+pos, val)) (zip [0..] vals)
-
-                  positions'' :: [(Int, Statement)] <-
+        Block sts_ -> do
+          renderBlock_Statements
+            (\sts ->
+              case m_branchChange of
+                Nothing -> do
+                  htmls <-
                     traverse
-                      (\(ix, valh) -> do
-                        m_val <- Store.rebuild valh
-                        case m_val of
-                          Nothing -> error $ "failed to rebuild " <> show valh
-                          Just val -> pure (ix, val)
-                      )
-                      positions'
+                      (renderStatementIndexed entries)
+                      (zip [0::Int ..] sts)
+                  pure $ sequence_ htmls
+                Just branchChange ->
+                  case branchChange of
+                    Diff.InsertBranch (Diff.InsertPositions positions) -> do
+                      let
+                        positions' :: [(Int, Hash Statement)]
+                        positions' =
+                          List.sortBy (compare `on` fst ) positions >>=
+                          \(ix, vals) -> fmap (\(pos, val) -> (ix+pos, val)) (zip [0..] vals)
 
-                  let
-                    sts' :: [(Int, Statement)]
-                    sts' = zip [0..] sts
+                      positions'' :: [(Int, Statement)] <-
+                        traverse
+                          (\(ix, valh) -> do
+                            m_val <- Store.rebuild valh
+                            case m_val of
+                              Nothing -> error $ "failed to rebuild " <> show valh
+                              Just val -> pure (ix, val)
+                          )
+                          positions'
 
-                  blockHtml <- overlayPositions (renderStatementIndexed entries) positions'' sts'
+                      let
+                        sts' :: [(Int, Statement)]
+                        sts' = zip [0..] sts
 
-                  pure blockHtml
+                      blockHtml <- overlayPositions (renderStatementIndexed entries) positions'' sts'
+
+                      pure blockHtml
+            )
+            sts_
   where
     renderStatementIndexed :: Foldable f => f (Diff.Entry Block) -> (Int, Statement) -> m Html
     renderStatementIndexed entries (ix, st) =
@@ -273,7 +293,10 @@ renderIdent (Ident ident) =
 
 renderSHole :: Html
 renderSHole =
-  Html.div ! Attr.class_ "syntax-leaf statement hole" $ "_"
+  Html.div ! Attr.class_ "syntax-leaf statement hole" $
+  Html.div ! Attr.class_ "syntax-line" $
+  Html.div ! Attr.class_ "syntax-symbol" $
+  "_"
 
 renderStatement_For ::
   Monad m =>
@@ -463,10 +486,3 @@ renderExpr expr =
         op
         value
     EHole -> renderEHole
-
-renderBlock :: Block -> Html
-renderBlock block =
-  case block of
-    Block sts ->
-      Html.div ! Attr.class_ "syntax-branch block" $ do
-        traverse_ renderStatement sts
