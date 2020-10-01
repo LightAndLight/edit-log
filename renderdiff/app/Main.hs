@@ -43,6 +43,7 @@ forLoop = do
     initial =
       For (Ident "x") EHole . Block $
       [ SHole
+      , SHole
       ]
 
     v :: Versioned Statement
@@ -50,6 +51,7 @@ forLoop = do
 
     Identity ((diff, diffHtml, es), _v') = runVersionedT v $ do
       Versioned.insert (Cons For_Block Nil) (1, SHole)
+      Versioned.replace (Cons For_Block $ Cons (Block_Index 0) Nil) (Print $ Int 666)
       es <- fmap snd <$> Log.getEntries
       diff <- Diff.toDiff es
       diffHtml <- Render.renderStatementWithDiff initial diff

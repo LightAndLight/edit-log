@@ -48,6 +48,8 @@ data Level :: * -> * -> * where
   IfThenElse_Then :: Level Statement Block
   IfThenElse_Else :: Level Statement Block
 
+  Print_Value :: Level Statement Expr
+
   BinOp_Left :: Level Expr Expr
   BinOp_Right :: Level Expr Expr
 
@@ -90,6 +92,10 @@ eqLevel l1 l2 =
     IfThenElse_Else ->
       case l2 of
         IfThenElse_Else -> Just Refl
+        _ -> Nothing
+    Print_Value ->
+      case l2 of
+        Print_Value -> Just Refl
         _ -> Nothing
     BinOp_Left ->
       case l2 of
@@ -167,6 +173,13 @@ traversal p f a =
               traversal p' f else_
             _ -> pure a
 
+        Print_Value ->
+          case a of
+            Print val ->
+              Print <$>
+              traversal p' f val
+            _ -> pure a
+
         BinOp_Left ->
           case a of
             BinOp op left right ->
@@ -211,6 +224,7 @@ showingLevelTarget l f =
     IfThenElse_Cond -> f
     IfThenElse_Then -> f
     IfThenElse_Else -> f
+    Print_Value -> f
     BinOp_Left -> f
     BinOp_Right -> f
     UnOp_Value -> f

@@ -8,6 +8,7 @@ import Data.Foldable (sequence_, traverse_)
 import Data.Function (on)
 import Data.Functor.Identity (runIdentity)
 import qualified Data.List as List
+import Data.List.NonEmpty (NonEmpty(..))
 import Text.Blaze.Html5 (Html, (!))
 import qualified Text.Blaze.Html5 as Html
 import qualified Text.Blaze.Html5.Attributes as Attr
@@ -19,6 +20,12 @@ import Path (Level(..))
 import Store (MonadStore)
 import qualified Store
 import Syntax (Ident(..), Statement(..), Expr(..), Block(..), BinOp(..), UnOp(..))
+
+renderInsertedStatement :: (Int, Statement) -> Html
+renderInsertedStatement (_, new) =
+  Html.div ! Attr.class_ ("syntax-branch statement diff") $ do
+    Html.div ! Attr.class_ "diff-added" $ do
+      renderStatement new
 
 renderLeafChange ::
   MonadStore m =>
@@ -76,15 +83,12 @@ renderLeafChange nodeType change item render =
         [] -> traverse_ (renderStatement . snd) olds
         new : newRest ->
           case olds of
-            [] -> traverse_ (renderStatement . snd) news
+            [] -> traverse_ renderInsertedStatement news
             old : oldRest ->
               if fst new <= fst old
-              then -- render the new one
-                Html.div ! Attr.class_ ("syntax-branch " <> nodeType <> " diff") $ do
-                  Html.div ! Attr.class_ "diff-added" $ do
-                    Html.div ! Attr.class_ "diff-annotation" $ Html.toHtml (show $ fst new)
-                    renderStatement $ snd new
-                    overlayPositions newRest olds
+              then do -- render the new one
+                renderInsertedStatement new
+                overlayPositions newRest olds
               else do -- render the old one
                 renderStatement $ snd old
                 overlayPositions news oldRest
@@ -92,6 +96,7 @@ renderLeafChange nodeType change item render =
 renderBlockWithDiff :: forall m. MonadStore m => Block -> Diff Block -> m Html
 renderBlockWithDiff block diff =
   case diff of
+    Diff.Empty -> pure $ renderBlock block
     Diff.Leaf change ->
       renderLeafChange "block" change block renderBlock
     Diff.Branch m_branchChange entries ->
@@ -131,7 +136,7 @@ renderBlockWithDiff block diff =
 
                   pure blockHtml
   where
-    renderStatementIndexed :: [Diff.Entry Block] -> (Int, Statement) -> m Html
+    renderStatementIndexed :: Foldable f => f (Diff.Entry Block) -> (Int, Statement) -> m Html
     renderStatementIndexed entries (ix, st) =
       case Diff.getEntry (Block_Index ix) entries of
         Nothing -> pure $ renderStatement st
@@ -152,12 +157,9 @@ renderBlockWithDiff block diff =
               if fst new <= fst old
               then do -- render the new one
                 restHtml <- overlayPositions renderOldStatement newRest olds
-                pure $
-                  Html.div ! Attr.class_ ("syntax-branch block diff") $ do
-                    Html.div ! Attr.class_ "diff-added" $ do
-                      Html.div ! Attr.class_ "diff-annotation" $ Html.toHtml (show $ fst new)
-                      renderStatement $ snd new
-                      restHtml
+                pure $ do
+                  renderInsertedStatement new
+                  restHtml
               else do -- render the old one
                 oldHtml <- renderOldStatement old
                 restHtml <- overlayPositions renderOldStatement news oldRest
@@ -166,11 +168,11 @@ renderBlockWithDiff block diff =
                   restHtml
 
 withDiff ::
-  Applicative m =>
+  (Applicative m, Foldable f) =>
   (b -> Html) ->
   (b -> Diff b -> m Html) ->
   Level a b ->
-  [Diff.Entry a] ->
+  f (Diff.Entry a) ->
   b ->
   m Html
 withDiff render renderWithDiff level entries val =
@@ -181,6 +183,7 @@ withDiff render renderWithDiff level entries val =
 renderStatementWithDiff :: MonadStore m => Statement -> Diff Statement -> m Html
 renderStatementWithDiff statement diff =
   case diff of
+    Diff.Empty -> pure $ renderStatement statement
     Diff.Leaf change -> renderLeafChange "statement" change statement renderStatement
     Diff.Branch m_branchChange entries ->
       case m_branchChange of
@@ -208,29 +211,31 @@ renderStatementWithDiff statement diff =
                 cond
                 then_
                 else_
+            Print val ->
+              renderStatement_Print
+                (withDiff renderExpr renderExprWithDiff Print_Value entries)
+                val
             SHole ->
               case entries of
-                [] -> pure renderSHole
-                _:_ -> error "there's no Level that can walk into a SHole"
+                _:|_ -> error "there's no Level that can walk into a SHole"
         Just branchChange ->
           case branchChange of
 
 renderExprWithDiff :: MonadStore m => Expr -> Diff Expr -> m Html
 renderExprWithDiff expr diff =
   case diff of
+    Diff.Empty -> pure $ renderExpr expr
     Diff.Leaf change -> renderLeafChange "expr" change expr renderExpr
     Diff.Branch m_branchChange entries ->
       case m_branchChange of
         Nothing ->
           case expr of
-            Bool b ->
+            Bool{} ->
               case entries of
-                [] -> pure $ renderExpr_Bool b
-                _:_ -> error "there's no Level that can walk into a Bool"
-            Int n ->
+                _:|_ -> error "there's no Level that can walk into a Bool"
+            Int{} ->
               case entries of
-                [] -> pure $ renderExpr_Int n
-                _:_ -> error "there's no Level that can walk into an Int"
+                _:|_ -> error "there's no Level that can walk into an Int"
             BinOp op left right ->
               renderExpr_BinOp
                 (withDiff renderExpr renderExprWithDiff BinOp_Left entries)
@@ -245,21 +250,20 @@ renderExprWithDiff expr diff =
                 value
             EHole ->
               case entries of
-                [] -> pure renderEHole
-                _:_ -> error "there's no Level that can walk into an EHole"
+                _:|_ -> error "there's no Level that can walk into an EHole"
         Just branchChange ->
           case branchChange of
 
 renderIdentWithDiff :: MonadStore m => Ident -> Diff Ident -> m Html
 renderIdentWithDiff ident diff =
   case diff of
+    Diff.Empty -> pure $ renderIdent ident
     Diff.Leaf change -> renderLeafChange "ident" change ident renderIdent
     Diff.Branch m_branchChange entries ->
       case m_branchChange of
         Nothing ->
           case entries of
-            [] -> pure $ renderIdent ident
-            _:_ -> error "there's no Level that can walk into an Ident"
+            _:|_ -> error "there's no Level that can walk into an Ident"
         Just branchChange ->
           case branchChange of
 
@@ -329,6 +333,19 @@ renderStatement_IfThenElse fCond fThen fElse cond then_ else_ = do
         Html.div ! Attr.class_ "syntax-symbol" $ ":"
       elseHtml
 
+renderStatement_Print ::
+  Monad m =>
+  (Expr -> m Html) ->
+  Expr -> m Html
+renderStatement_Print fVal val = do
+  valHtml <- fVal val
+  pure $
+    Html.div ! Attr.class_ "syntax-branch statement print" $ do
+      Html.div ! Attr.class_ "syntax-line" $ do
+        Html.div ! Attr.class_ "syntax-keyword" $ "print"
+        Html.div ! Attr.class_ "syntax-symbol" $ ":"
+        valHtml
+
 renderStatement :: Statement -> Html
 renderStatement statement =
   case statement of
@@ -357,6 +374,11 @@ renderStatement statement =
         cond
         then_
         else_
+    Print val ->
+      runIdentity $
+      renderStatement_Print
+        (pure . renderExpr)
+        val
     SHole -> renderSHole
 
 renderBinOp :: BinOp -> Html

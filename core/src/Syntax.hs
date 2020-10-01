@@ -16,6 +16,7 @@ data Statement
   = For Ident Expr Block
   | IfThen Expr Block
   | IfThenElse Expr Block Block
+  | Print Expr
   | SHole
   deriving Show
 

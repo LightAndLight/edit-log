@@ -87,6 +87,13 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                   lift . addNode $ NIfThenElse condh then_h else_h'
                 _ -> empty
 
+            Print_Value ->
+              case n of
+                NPrint valh -> do
+                  valh' <- go rest f valh
+                  lift . addNode $ NPrint valh'
+                _ -> empty
+
             BinOp_Left ->
               case n of
                 NBinOp op lefth righth -> do
@@ -187,6 +194,14 @@ setH path_ val_ = runMaybeT . go path_ val_
                 NIfThenElse condh then_h else_h -> do
                   res <- go rest mval else_h
                   rooth' <- lift . addNode $ NIfThenElse condh then_h (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
+
+            Print_Value ->
+              case n of
+                NPrint valh -> do
+                  res <- go rest mval valh
+                  rooth' <- lift . addNode $ NPrint (rootHash res)
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
@@ -294,6 +309,8 @@ rebuild = runMaybeT . go
               go cond <*>
               go then_ <*>
               go else_
+            NPrint val ->
+              Print <$> go val
 
             NBool b -> pure $ Bool b
             NInt n -> pure $ Int n
@@ -340,6 +357,9 @@ addStatement s =
       then_h <- addBlock then_
       else_h <- addBlock else_
       addNode $ NIfThenElse condh then_h else_h
+    Print val -> do
+      valh <- addExpr val
+      addNode $ NPrint valh
     SHole -> addNode NSHole
 
 addBlock :: MonadStore m => Block -> m (Hash Block)

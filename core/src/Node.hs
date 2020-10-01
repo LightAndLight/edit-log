@@ -18,6 +18,7 @@ data Node :: * -> * where
   NFor :: Ident -> Hash Expr -> Hash Block -> Node Statement
   NIfThen :: Hash Expr -> Hash Block -> Node Statement
   NIfThenElse :: Hash Expr -> Hash Block -> Hash Block -> Node Statement
+  NPrint :: Hash Expr -> Node Statement
 
   NBool :: Bool -> Node Expr
   NInt :: Int -> Node Expr
@@ -58,12 +59,15 @@ instance Hashable (Node a) where
       NSHole -> hashWithSalt s (8::Int)
       NEHole -> hashWithSalt s (9::Int)
 
+      NPrint e -> hashWithSalt s (10::Int, e)
+
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
   case n of
     NFor{} -> HStatement $ hash n
     NIfThen{} -> HStatement $ hash n
     NIfThenElse{} -> HStatement $ hash n
+    NPrint{} -> HStatement $ hash n
 
     NBool{} -> HExpr $ hash n
     NInt{} -> HExpr $ hash n

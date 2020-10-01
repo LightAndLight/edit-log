@@ -2,11 +2,14 @@
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving #-}
+{-# language QuantifiedConstraints #-}
 module Diff where
 
 import Data.Foldable (foldlM, foldl')
 import Data.Function (on)
 import qualified Data.List as List
+import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as NonEmpty
 import Data.Type.Equality ((:~:)(..))
 
 import Hash (Hash)
@@ -21,23 +24,29 @@ data Entry a where
   Entry :: Level a b -> Diff b -> Entry a
 deriving instance Show (Entry a)
 
-getEntry :: Level a b -> [Entry a] -> Maybe (Diff b)
-getEntry level entries =
-  case entries of
-    [] -> Nothing
-    Entry level' diff : rest ->
+getEntry :: Foldable f => Level a b -> f (Entry a) -> Maybe (Diff b)
+getEntry level =
+  foldr
+    (\(Entry level' diff) rest ->
       case eqLevel level level' of
-        Nothing -> getEntry level rest
+        Nothing -> rest
         Just Refl -> Just diff
+    )
+    Nothing
 
-setEntry :: Level a b -> Diff b -> [Entry a] -> [Entry a]
+setEntry :: Level a b -> Diff b -> NonEmpty (Entry a) -> NonEmpty (Entry a)
 setEntry level d entries =
-  case entries of
-    [] -> [Entry level d]
-    Entry level' diff : rest ->
+  case NonEmpty.uncons entries of
+    (entry@(Entry level' _), m_rest) ->
       case eqLevel level level' of
-        Nothing -> Entry level' diff : setEntry level d rest
-        Just Refl -> Entry level' d : rest
+        Nothing ->
+          case m_rest of
+            Nothing -> pure entry
+            Just rest -> NonEmpty.cons entry (setEntry level d rest)
+        Just Refl ->
+          case m_rest of
+            Nothing -> pure $ Entry level d
+            Just rest -> NonEmpty.cons (Entry level d) rest
 
 newtype InsertPositions
   = InsertPositions [(Int, [Hash Statement])]
@@ -116,12 +125,13 @@ data BranchChange :: * -> * where
 deriving instance Show (BranchChange a)
 
 data Diff a where
+  Empty :: Diff a
   Leaf :: LeafChange a -> Diff a
-  Branch :: Maybe (BranchChange a) -> [Entry a] -> Diff a
+  Branch :: Maybe (BranchChange a) -> NonEmpty (Entry a) -> Diff a
 deriving instance Show (Diff a)
 
 emptyDiff :: Diff a
-emptyDiff = Branch Nothing []
+emptyDiff = Empty
 
 applyChange :: MonadStore m => Path a b -> LeafChange b -> Hash a -> m (Maybe (Hash a))
 applyChange p c h =
@@ -151,6 +161,7 @@ insert p c currentDiff =
   case p of
     Nil ->
       case currentDiff of
+        Empty -> pure $ Leaf c
         Branch m_branchChange ms ->
           case c of
             ReplaceLeaf{} -> pure $ Leaf c
@@ -164,11 +175,14 @@ insert p c currentDiff =
         Leaf{} -> pure $ Leaf c
     Cons l p' ->
       case currentDiff of
+        Empty -> do
+          entry <- Entry l <$> insert p' c emptyDiff
+          pure $ Branch Nothing (pure entry)
         Branch branchChange entries ->
           case getEntry l entries of
             Nothing -> do
               entry <- Entry l <$> insert p' c emptyDiff
-              pure $ Branch branchChange (entry : entries)
+              pure $ Branch branchChange (NonEmpty.cons entry entries)
             Just m' -> do
               m'' <- insert p' c m'
               let entries' = setEntry l m'' entries
@@ -184,10 +198,11 @@ insert p c currentDiff =
               case l of
                 Block_Index ix ->
                   case getPosition ix positions of
-                    Nothing ->
+                    Nothing -> do
                       -- there is an insert change, but there also needs to be other changes applied to existing
                       -- (non-inserted) block indices
-                      error "TODO: handle this case"
+                      entry <- Entry l <$> insert p' c emptyDiff
+                      pure $ Branch (Just $ InsertBranch positions) (pure entry)
                     Just statementh -> do
                       m_statementh' <- applyChange p' c statementh
                       pure $ case m_statementh' of
@@ -206,10 +221,12 @@ traversal p f m =
   case p of
     Nil ->
       case m of
+        Empty -> pure m
         Leaf h -> Leaf <$> f h
         Branch{} -> pure m
     Cons l p' ->
       case m of
+        Empty -> pure m
         Leaf{} -> pure m
         Branch branchChange ms ->
           Branch branchChange <$>
@@ -240,6 +257,7 @@ fromDiff = go Nil
     go :: forall b. Path a b -> Diff b -> [Log.Entry a]
     go path d =
       case d of
+        Empty -> []
         Leaf change ->
           case change of
             ReplaceLeaf old new -> [Log.Replace path old new]
@@ -258,5 +276,5 @@ fromDiff = go Nil
                case change of
                  InsertBranch positions -> error "TODO: translate Insert into log entry" positions
             )
-            branchChange ++
-          (entries >>= \(Entry level d') -> go (Path.snoc path level) d')
+            branchChange <>
+          (NonEmpty.toList entries >>= \(Entry level d') -> go (Path.snoc path level) d')
