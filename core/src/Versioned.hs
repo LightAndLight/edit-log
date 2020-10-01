@@ -6,12 +6,12 @@ import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (lift)
 
 import Log (Time, Entry)
-import Node (KnownHashType, Hash)
+import Node (KnownNodeType, Hash)
 import Path (Path)
 import Syntax (Statement, Block)
 
 class Monad m => MonadVersioned a m | m -> a where
-  replace :: KnownHashType b => Path a b -> b -> m (Maybe (Time, Entry a))
+  replace :: KnownNodeType b => Path a b -> b -> m (Maybe (Time, Entry a))
   replaceH :: Path a b -> Hash b -> m (Maybe (Time, Entry a))
 
   insert :: Path a Block -> (Int, Statement) -> m (Maybe (Time, Entry a))

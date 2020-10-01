@@ -12,7 +12,7 @@ import qualified Data.List as List
 
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), Statement(..), Block(..))
-import Node (KnownHashType, Hash, Node(..), hashNode)
+import Node (KnownNodeType, Hash, Node(..), hashNode)
 
 class Monad m => MonadStore m where
   lookupNode :: Hash a -> m (Maybe (Node a))
@@ -269,7 +269,7 @@ insertH path positions =
             sholeHash <- addNode NSHole
             addNode . NBlock $ insertAll sholeHash positions sts
 
-addNode :: (KnownHashType a, MonadStore m) => Node a -> m (Hash a)
+addNode :: (KnownNodeType a, MonadStore m) => Node a -> m (Hash a)
 addNode n = do
   let h = hashNode n
   write h n

@@ -10,15 +10,15 @@ import Data.Type.Equality ((:~:)(Refl))
 
 import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident)
 
-data HashType :: * -> * where
-  TExpr :: HashType Expr
-  TStatement :: HashType Statement
-  TBlock :: HashType Block
+data NodeType :: * -> * where
+  TExpr :: NodeType Expr
+  TStatement :: NodeType Statement
+  TBlock :: NodeType Block
 
-class KnownHashType t where; hashType :: HashType t
-instance KnownHashType Expr where; hashType = TExpr
-instance KnownHashType Statement where; hashType = TStatement
-instance KnownHashType Block where; hashType = TBlock
+class KnownNodeType t where; nodeType :: NodeType t
+instance KnownNodeType Expr where; nodeType = TExpr
+instance KnownNodeType Statement where; nodeType = TStatement
+instance KnownNodeType Block where; nodeType = TBlock
 
 data Hash :: * -> * where
   HExpr :: Int -> Hash Expr
@@ -168,7 +168,7 @@ instance Hashable (Node a) where
       NSHole -> hashWithSalt s (8::Int)
       NEHole -> hashWithSalt s (9::Int)
 
-hashNode :: forall a. KnownHashType a => Node a -> Hash a
+hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
   case n of
     NFor{} -> HStatement $ hash n

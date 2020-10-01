@@ -17,7 +17,7 @@ where
 import Control.Monad.State (StateT, runStateT, gets, modify)
 import Data.Functor.Identity (Identity(..))
 
-import Node (KnownHashType, HashType(..), Hash, hashType)
+import Node (KnownNodeType, NodeType(..), Hash, nodeType)
 import Versioned (MonadVersioned(..))
 import Log (MonadLog, Time, Entry(..), append, getEntries, getPhysicalTime)
 import Log.Pure (LogT, runLogT, Log, newLog)
@@ -82,25 +82,25 @@ debugLog (Versioned s l _) = (fmap.fmap) f entries
               Just old -> Path.showingPathTarget path (DebugDelete path ix old)
     Identity (entries, _) = runLogT l getEntries
 
-newVersioned :: forall a. KnownHashType a => a -> Versioned a
+newVersioned :: forall a. KnownNodeType a => a -> Versioned a
 newVersioned a = Versioned store newLog ctx
   where
     Identity (initialh, store) =
       runStoreT newStore $ do
-        case hashType @a of
+        case nodeType @a of
           TExpr -> addExpr a
           TStatement -> addStatement a
           TBlock -> addBlock a
     ctx = Context { initial = a, root = initialh }
 
 instance Monad m => MonadVersioned a (VersionedT a m) where
-  replace :: forall b. KnownHashType b => Path a b -> b -> VersionedT a m (Maybe (Time, Entry a))
+  replace :: forall b. KnownNodeType b => Path a b -> b -> VersionedT a m (Maybe (Time, Entry a))
   replace path value = do
     rooth <- VersionedT $ gets root
     m_res <-
       Store.setH
         path
-        (case hashType @b of
+        (case nodeType @b of
             TExpr -> addExpr value
             TStatement -> addStatement value
             TBlock -> addBlock value
