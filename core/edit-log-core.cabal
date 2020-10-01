@@ -16,6 +16,7 @@ extra-source-files:  CHANGELOG.md
 library
   exposed-modules:     
                        Diff
+                     , Hash
                      , Log
                      , Log.Pure
                      , Node

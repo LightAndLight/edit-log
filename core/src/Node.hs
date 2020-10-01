@@ -8,6 +8,7 @@ import Data.Foldable (traverse_)
 import Data.Hashable (Hashable(..))
 import Data.Type.Equality ((:~:)(Refl))
 
+import Hash (Hash(..), eqHash)
 import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident)
 
 data NodeType :: * -> * where
@@ -16,51 +17,10 @@ data NodeType :: * -> * where
   TBlock :: NodeType Block
 
 class KnownNodeType t where; nodeType :: NodeType t
+
 instance KnownNodeType Expr where; nodeType = TExpr
 instance KnownNodeType Statement where; nodeType = TStatement
 instance KnownNodeType Block where; nodeType = TBlock
-
-data Hash :: * -> * where
-  HExpr :: Int -> Hash Expr
-  HStatement :: Int -> Hash Statement
-  HBlock :: Int -> Hash Block
-deriving instance Show (Hash a)
-
-eqHash :: Hash a -> Hash b -> Maybe (a :~: b)
-eqHash h1 h2 =
-  case h1 of
-    HExpr n ->
-      case h2 of
-        HExpr n' -> do
-          guard (n == n')
-          pure Refl
-        _ -> Nothing
-    HStatement n ->
-      case h2 of
-        HStatement n' -> do
-          guard (n == n')
-          pure Refl
-        _ -> Nothing
-    HBlock n ->
-      case h2 of
-        HBlock n' -> do
-          guard (n == n')
-          pure Refl
-        _ -> Nothing
-
-instance Hashable (Hash a) where
-  hashWithSalt s = hashWithSalt s . unHash
-
-instance Eq (Hash a) where
-  h1 == h2 = unHash h1 == unHash h2
-
-unHash :: Hash a -> Int
-unHash h =
-  case h of
-    HExpr n -> n
-    HStatement n -> n
-    HBlock n -> n
-
 data Node :: * -> * where
   NFor :: Ident -> Hash Expr -> Hash Block -> Node Statement
   NIfThen :: Hash Expr -> Hash Block -> Node Statement

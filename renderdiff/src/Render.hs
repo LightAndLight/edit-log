@@ -14,7 +14,7 @@ import qualified Text.Blaze.Html5.Attributes as Attr
 
 import Diff (Diff)
 import qualified Diff as Diff
-import Node (Hash)
+import Hash (Hash)
 import Path (Level(..))
 import Store (MonadStore)
 import qualified Store

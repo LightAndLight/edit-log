@@ -10,9 +10,10 @@ import Control.Monad.State (StateT)
 import Data.Function (on)
 import qualified Data.List as List
 
+import Hash (Hash)
+import Node (KnownNodeType, Node(..), hashNode)
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), Statement(..), Block(..))
-import Node (KnownNodeType, Hash, Node(..), hashNode)
 
 class Monad m => MonadStore m where
   lookupNode :: Hash a -> m (Maybe (Node a))

@@ -5,8 +5,9 @@ module Versioned where
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (lift)
 
+import Hash (Hash)
 import Log (Time, Entry)
-import Node (KnownNodeType, Hash)
+import Node (KnownNodeType)
 import Path (Path)
 import Syntax (Statement, Block)
 

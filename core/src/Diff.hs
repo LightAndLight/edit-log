@@ -9,8 +9,8 @@ import Data.Function (on)
 import qualified Data.List as List
 import Data.Type.Equality ((:~:)(..))
 
+import Hash (Hash)
 import qualified Log
-import Node (Hash)
 import Path (Level(..), Path(..), eqLevel)
 import qualified Path
 import Store (MonadStore, setH)

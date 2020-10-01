@@ -16,7 +16,8 @@ import Control.Monad.State (StateT, runStateT, get, modify)
 import Control.Monad.Trans.Class (MonadTrans(..))
 import Data.Type.Equality ((:~:)(Refl))
 
-import Node (Hash, Node, eqHash, eqNode)
+import Hash (Hash, eqHash)
+import Node (Node, eqNode)
 import Store (MonadStore(..))
 
 data Entry f g where

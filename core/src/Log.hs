@@ -8,7 +8,7 @@ module Log where
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 
-import Node (Hash)
+import Hash (Hash)
 import Path (Path)
 import Store.Pure (StoreT)
 import Syntax (Block, Statement)
