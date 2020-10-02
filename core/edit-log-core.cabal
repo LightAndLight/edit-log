@@ -17,6 +17,7 @@ library
   exposed-modules:     
                        Diff
                      , Diff.DeleteSet
+                     , Diff.SequenceDiff
                      , Hash
                      , Log
                      , Log.Pure
