@@ -3,8 +3,6 @@ module Test.Hash (hashSpec) where
 import Data.Maybe (isJust)
 import Data.Some (Some(..))
 import Hedgehog
-import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
@@ -13,7 +11,7 @@ import Gen.Hash (genHash, genEqualHash, genEqualHashes)
 import Hash (Hash, eqHash)
 
 equalHashes :: Hash a -> Hash b -> PropertyT IO ()
-equalHashes t1 t2 = diff t1 (\a b -> isJust $ eqHash a b) t1
+equalHashes t1 t2 = diff t1 (\a b -> isJust $ eqHash a b) t2
 
 hashSpec :: Spec
 hashSpec =

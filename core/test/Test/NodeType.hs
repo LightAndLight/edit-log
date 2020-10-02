@@ -11,7 +11,7 @@ import Gen.NodeType (SomeNodeType(..), genNodeType, genEqualNodeType, genEqualNo
 import NodeType (NodeType, eqNodeType)
 
 equalNodeTypes :: NodeType a -> NodeType b -> PropertyT IO ()
-equalNodeTypes t1 t2 = diff t1 (\a b -> isJust $ eqNodeType a b) t1
+equalNodeTypes t1 t2 = diff t1 (\a b -> isJust $ eqNodeType a b) t2
 
 nodeTypeSpec :: Spec
 nodeTypeSpec = do

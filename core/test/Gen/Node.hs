@@ -7,7 +7,6 @@ module Gen.Node
   )
 where
 
-import Data.Some (Some(..))
 import Hedgehog (Gen)
 import qualified Hedgehog.Range as Range
 import qualified Hedgehog.Gen as Gen
