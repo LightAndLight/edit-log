@@ -9,6 +9,7 @@ import Test.Hspec.Hedgehog
 import qualified Hedgehog.Range as Range
 import qualified Hedgehog.Gen as Gen
 
+import Diff.DeleteSet (DeleteSet)
 import qualified Diff.DeleteSet as DeleteSet
 
 valid :: [(Int, a)] -> Bool
@@ -22,7 +23,7 @@ insert ix val ds =
   go (ix + length (filter ((<= ix) . fst) ds))
   where
     go i =
-      if i `elem` ds
+      if i `elem` fmap fst ds
       then go (i+1)
       else (i, val) : ds
 
@@ -31,9 +32,9 @@ deleteSetSpec =
   describe "DeleteSet" $ do
     describe "spec" $ do
       it "sort $ insert 0 () (insert 0 () []) = [(0, ()), (1, ())]" $ do
-        sort (insert 0 (insert 0 [])) `shouldBe` [0, 1]
+        sort (insert 0 () (insert 0 () [])) `shouldBe` [(0, ()), (1, ())]
       it "sort . toList $ insert 0 () (insert 0 () (insert 0 () [])) = [(0, ()), (1, ()), (2, ())]" $ do
-        sort (insert 0 (insert 0 (insert 0 []))) `shouldBe` [0, 1, 2]
+        sort (insert 0 () (insert 0 () (insert 0 () []))) `shouldBe` [(0, ()), (1, ()), (2, ())]
       it "forall ix val ds. valid ds ==> valid (insert ix val ds)" . hedgehog $ do
         vals <- forAll $ Gen.list (Range.constant 1 100) (Gen.int $ Range.constant 0 1000)
         ref <- liftIO $ newIORef []
@@ -44,7 +45,7 @@ deleteSetSpec =
           liftIO $ writeIORef ref output
     describe "impl" $ do
       it "empty correct" $ do
-        DeleteSet.toList DeleteSet.empty `shouldBe` []
+        DeleteSet.toList (DeleteSet.empty :: DeleteSet ()) `shouldBe` []
       it "insert correct" . hedgehog $ do
         vals <- forAll $ Gen.list (Range.constant 1 100) (Gen.int $ Range.constant 0 1000)
         ref <- liftIO $ newIORef ([], DeleteSet.empty)
