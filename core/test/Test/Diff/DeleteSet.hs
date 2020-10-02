@@ -11,35 +11,35 @@ import qualified Hedgehog.Gen as Gen
 
 import qualified Diff.DeleteSet as DeleteSet
 
-valid :: [Int] -> Bool
+valid :: [(Int, a)] -> Bool
 valid ds =
   distinct
   where
-    distinct = nub ds == ds
+    distinct = nub (fst <$> ds) == fmap fst ds
 
-insert :: Int -> [Int] -> [Int]
-insert ix ds =
-  go (ix + length (filter (<= ix) ds))
+insert :: Int -> a -> [(Int, a)] -> [(Int, a)]
+insert ix val ds =
+  go (ix + length (filter ((<= ix) . fst) ds))
   where
     go i =
       if i `elem` ds
       then go (i+1)
-      else i : ds
+      else (i, val) : ds
 
 deleteSetSpec :: Spec
 deleteSetSpec =
   describe "DeleteSet" $ do
     describe "spec" $ do
-      it "sort $ insert 0 (insert 0 []) = [0, 1]" $ do
+      it "sort $ insert 0 () (insert 0 () []) = [(0, ()), (1, ())]" $ do
         sort (insert 0 (insert 0 [])) `shouldBe` [0, 1]
-      it "sort . toList $ insert 0 (insert 0 (insert 0 [])) = [0, 1, 2]" $ do
+      it "sort . toList $ insert 0 () (insert 0 () (insert 0 () [])) = [(0, ()), (1, ()), (2, ())]" $ do
         sort (insert 0 (insert 0 (insert 0 []))) `shouldBe` [0, 1, 2]
-      it "forall ix ds. valid ds ==> valid (insert ix ds)" . hedgehog $ do
+      it "forall ix val ds. valid ds ==> valid (insert ix val ds)" . hedgehog $ do
         vals <- forAll $ Gen.list (Range.constant 1 100) (Gen.int $ Range.constant 0 1000)
         ref <- liftIO $ newIORef []
         for_ vals $ \val -> do
           input <- liftIO $ readIORef ref
-          let output = insert val input
+          let output = insert val () input
           assert $ valid output
           liftIO $ writeIORef ref output
     describe "impl" $ do
@@ -50,7 +50,7 @@ deleteSetSpec =
         ref <- liftIO $ newIORef ([], DeleteSet.empty)
         for_ vals $ \val -> do
           (input, input') <- liftIO $ readIORef ref
-          let output = insert val input
-          let output' = DeleteSet.insert val input'
-          sort output === sort (DeleteSet.toList output')
+          let output = insert val () input
+          let output' = DeleteSet.insert val () input'
+          sort (fst <$> output) === sort (fst <$> DeleteSet.toList output')
           liftIO $ writeIORef ref (output, output')
