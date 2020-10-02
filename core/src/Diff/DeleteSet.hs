@@ -1,3 +1,4 @@
+{-# language BangPatterns #-}
 module Diff.DeleteSet
   ( DeleteSet
   , empty
@@ -6,8 +7,11 @@ module Diff.DeleteSet
   )
 where
 
+import Data.IntSet (IntSet)
+import qualified Data.IntSet as IntSet
+
 newtype DeleteSet
-  = DeleteSet [Int]
+  = DeleteSet IntSet
   deriving Show
 
 empty :: DeleteSet
@@ -15,13 +19,13 @@ empty = DeleteSet mempty
 
 insert :: Int -> DeleteSet -> DeleteSet
 insert ix (DeleteSet ds) =
-  DeleteSet $ go (ix + length (filter (<= ix) ds))
+  DeleteSet $ go (ix + IntSet.foldl' (\acc k -> if k <= ix then acc + 1 else acc) 0 ds)
   where
-    go i =
-      if i `elem` ds
+    go !i =
+      if IntSet.member i ds
       then go (i+1)
-      else i : ds
+      else IntSet.insert i ds
 
 -- no ordering guarantee is made
 toList :: DeleteSet -> [Int]
-toList (DeleteSet ds) = ds
+toList (DeleteSet ds) = IntSet.toList ds
