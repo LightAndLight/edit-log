@@ -3,6 +3,7 @@ module Main where
 import Test.Hspec
 
 import Test.Diff.DeleteSet (deleteSetSpec)
+import Test.Diff.SequenceDiff (sequenceDiffSpec)
 import Test.Hash (hashSpec)
 import Test.NodeType (nodeTypeSpec)
 import Test.Store.Pure (storePureSpec)
@@ -16,6 +17,7 @@ main =
     nodeTypeSpec
     storePureSpec
     deleteSetSpec
+    sequenceDiffSpec
     describe "Store.insertAll" $ do
       it "insertAll [(0, [x, y])] [a, b] = [x, y, a, b]" $ do
         Store.insertAll '_' [(0, "xy")] "ab" `shouldBe` "xyab"
