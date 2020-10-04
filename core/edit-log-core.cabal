@@ -36,6 +36,7 @@ library
                      , containers
                      , dependent-sum-template
                      , hashable
+                     , lens
                      , mtl
                      , some
                      , transformers >= 0.5

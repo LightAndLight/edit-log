@@ -14,12 +14,14 @@ module Diff.SequenceDiff
   )
 where
 
+import Control.Lens (over, mapped, _1)
 import qualified Data.IntMap as IntMap
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NonEmpty
 
 data Change a
-  = Insert (NonEmpty a)
+  = Replace a
+  | Insert (NonEmpty a)
   | Delete
   deriving (Eq, Show)
 
@@ -28,8 +30,9 @@ changeSize change =
   case change of
     Insert as -> length as
     Delete -> 1
+    Replace{} -> 1
 
-newtype SequenceDiff a = SequenceDiff [Change a]
+newtype SequenceDiff a = SequenceDiff [(Int, Change a)]
   deriving (Eq, Show)
 
 empty :: SequenceDiff a
@@ -40,39 +43,46 @@ size (SequenceDiff cs) = length cs
 
 insert :: forall a. Int -> a -> SequenceDiff a -> SequenceDiff a
 insert ix val (SequenceDiff cs) =
-  SequenceDiff $ insertEntry (zip [0..] cs)
+  SequenceDiff $ insertEntry ix cs
   where
-    insertEntry :: [(Int, Change a)] -> [Change a]
-    insertEntry orderedCs =
+    insertEntry :: Int -> [(Int, Change a)] -> [(Int, Change a)]
+    insertEntry currentIx orderedCs =
       case orderedCs of
-        [] -> [Insert $ pure val]
-        (k, change) : rest ->
+        [] -> [(currentIx, Insert $ pure val)]
+        entry@(k, change) : rest ->
           let sz = changeSize change in
-          if k <= ix
-          then -- here
-            if ix < k + sz
+          if k <= currentIx
+          then
+            if currentIx <= k + sz
             then
               case change of
                 Delete ->
                   -- sz = 1
                   --
-                  -- k <= ix < k + 1, therefore ix = k
+                  -- k <= currentIx <= k + 1, therefore currentIx \in {k, k+1}
+                  if currentIx == k
+                  then (k, Replace val) : rest
+                  else entry : insertEntry (currentIx - 1) rest
+                Replace{} ->
+                  -- sz = 1
                   --
-                  -- increment.
-                  change : insertEntry rest
+                  -- k <= currentIx <= k + 1, therefore currentIx \in {k, k+1}
+                  if currentIx == k
+                  then (k, Replace val) : rest
+                  else entry : insertEntry (currentIx - 1) rest
                 Insert vals ->
                   -- The entry we're inserting should lie somewhere in vals.
                   --
                   -- Since we're iterating over entries in ascending order of
                   -- keys, we know this the canonical place for the insert
                   let
-                    (prefix, suffix) = NonEmpty.splitAt (ix - k) vals
+                    (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
                   in
-                    Insert (foldr NonEmpty.cons (val :| suffix) prefix) : fmap snd rest
+                    (k, Insert $ foldr NonEmpty.cons (val :| suffix) prefix) : over (mapped._1) (+1) rest
             else
-              change : insertEntry rest
+              entry : insertEntry (currentIx - sz) rest
           else
-            change : insertEntry rest
+            (currentIx, Insert $ pure val) : entry : rest
 
 {-
 
@@ -94,8 +104,9 @@ apply (SequenceDiff cs) xs =
           Nothing -> x : rest
           Just change ->
             case change of
-              Insert vals -> NonEmpty.toList vals ++ rest
+              Insert vals -> NonEmpty.toList vals ++ x : rest
               Delete -> rest
+              Replace val -> val : rest
       )
       (case IntMap.lookup xsLen csMap of
          Nothing -> []
@@ -103,11 +114,12 @@ apply (SequenceDiff cs) xs =
            case change of
              Insert vals -> NonEmpty.toList vals
              Delete -> error "bounds error"
+             Replace{} -> error "bounds error"
       )
       (zip [0..] xs)
   where
-    csMap = IntMap.fromList $ zip [0..] cs
+    csMap = IntMap.fromList cs
 
 
 toList :: SequenceDiff a -> [(Int, Change a)]
-toList (SequenceDiff cs) = zip [0..] cs
+toList (SequenceDiff cs) = cs
