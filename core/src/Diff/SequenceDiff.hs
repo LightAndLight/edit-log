@@ -6,9 +6,7 @@ module Diff.SequenceDiff
   , empty
   , size
   , insert
-  {-
   , delete
-  -}
   , apply
   , toList
   )
@@ -20,7 +18,7 @@ import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NonEmpty
 
 data Change a
-  = Replace a
+  = Replace (NonEmpty a)
   | Insert (NonEmpty a)
   | Delete
   deriving (Eq, Show)
@@ -30,7 +28,7 @@ changeSize change =
   case change of
     Insert as -> length as
     Delete -> 1
-    Replace{} -> 1
+    Replace as -> length as
 
 newtype SequenceDiff a = SequenceDiff [(Int, Change a)]
   deriving (Eq, Show)
@@ -61,14 +59,14 @@ insert ix val (SequenceDiff cs) =
                   --
                   -- k <= currentIx <= k + 1, therefore currentIx \in {k, k+1}
                   if currentIx == k
-                  then (k, Replace val) : rest
+                  then (k, Replace $ pure val) : rest
                   else entry : insertEntry (currentIx - 1) rest
                 Replace{} ->
                   -- sz = 1
                   --
                   -- k <= currentIx <= k + 1, therefore currentIx \in {k, k+1}
                   if currentIx == k
-                  then (k, Replace val) : rest
+                  then (k, Replace $ pure val) : rest
                   else entry : insertEntry (currentIx - 1) rest
                 Insert vals ->
                   -- The entry we're inserting should lie somewhere in vals.
@@ -84,14 +82,56 @@ insert ix val (SequenceDiff cs) =
           else
             (currentIx, Insert $ pure val) : entry : rest
 
-{-
-
-delete :: Int -> SequenceDiff a -> SequenceDiff a
+delete :: Show a => Int -> SequenceDiff a -> SequenceDiff a
 delete ix (SequenceDiff cs) =
-  SequenceDiff $
-  _
-
--}
+  SequenceDiff $ go ix cs
+  where
+    go currentIx entries =
+      case entries of
+        [] -> [(currentIx, Delete)]
+        entry@(k, change) : rest ->
+          let sz = changeSize change in
+          if k <= currentIx
+          then
+            if currentIx <= k + sz
+            then
+              case change of
+                Delete ->
+                  error "impossible"
+                Replace vals ->
+                  if currentIx < k + sz
+                  then
+                    let
+                      (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
+                      rest' = over (mapped._1) (subtract 1) rest
+                    in
+                      case NonEmpty.nonEmpty (prefix <> tail suffix) of
+                        Nothing -> rest'
+                        Just vals' ->
+                          (k, Insert vals') : rest'
+                  else
+                    entry : go (currentIx - sz) rest
+                Insert vals ->
+                  let rest' = over (mapped._1) (subtract 1) rest in
+                  if currentIx < k + sz
+                  then
+                    let
+                      (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
+                    in
+                      case NonEmpty.nonEmpty (prefix <> tail suffix) of
+                        Nothing -> rest'
+                        Just vals' ->
+                          (k, Insert vals') : rest'
+                  else
+                    case rest of
+                      x : _ | fst x == currentIx ->
+                        entry : go (currentIx - sz) rest
+                      _ ->
+                        (k, Replace vals) : rest'
+            else
+              entry : go (currentIx - sz) rest
+          else
+            (currentIx, Delete) : entry : rest
 
 apply :: SequenceDiff a -> [a] -> [a]
 apply (SequenceDiff cs) xs =
@@ -106,14 +146,14 @@ apply (SequenceDiff cs) xs =
             case change of
               Insert vals -> NonEmpty.toList vals ++ x : rest
               Delete -> rest
-              Replace val -> val : rest
+              Replace vals -> foldr (:) rest vals
       )
       (case IntMap.lookup xsLen csMap of
          Nothing -> []
          Just change ->
            case change of
              Insert vals -> NonEmpty.toList vals
-             Delete -> error "bounds error"
+             Delete -> error $ "bounds error: " <> show xsLen
              Replace{} -> error "bounds error"
       )
       (zip [0..] xs)
