@@ -121,7 +121,7 @@ sequenceDiffSpec =
           ["a", "b", "c", "1", "2", "3"]
 
     describe "properties" $ do
-      let numTests = 100
+      let numTests = 10000
       modifyMaxSuccess (const numTests) . it "forall ix val cs xs. insert ix val (apply cs xs) = apply (insert ix val cs) xs" . hedgehog $ do
         xs <- forAll $ Gen.list (Range.constant 0 100) genVal
         ix <- forAll $ Gen.int (Range.constant 0 $ length xs) -- you can insert at the end of the list
@@ -130,11 +130,12 @@ sequenceDiffSpec =
         insert ix val (SequenceDiff.apply cs xs) ===
           SequenceDiff.apply (SequenceDiff.insert ix val cs) xs
 
-      modifyMaxSuccess (const numTests) . it "forall ix val. toList (delete ix $ insert ix val empty) = empty" . hedgehog $ do
+      modifyMaxSuccess (const numTests) . it "forall ix val cs. delete ix (insert ix val cs) = cs" . hedgehog $ do
         ix <- forAll $ Gen.int (Range.constant 0 maxBound)
         val <- forAll genVal
-        (SequenceDiff.delete ix $ SequenceDiff.insert ix val SequenceDiff.empty) ===
-          SequenceDiff.empty
+        cs <- forAll $ genSequenceDiff genVal
+        SequenceDiff.delete ix (SequenceDiff.insert ix val cs) ===
+          cs
 
       modifyMaxSuccess (const numTests) . it "forall ix val xs. length xs > 0 ==> apply (delete (ix + 1) $ insert ix val empty) xs = replace ix val xs" . hedgehog $ do
         xs <- forAll $ Gen.list (Range.constant 1 100) genVal -- nonempty
