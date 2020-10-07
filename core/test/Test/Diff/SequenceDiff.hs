@@ -1,7 +1,10 @@
 {-# language BangPatterns #-}
 {-# language OverloadedLists #-}
+{-# language RankNTypes #-}
 module Test.Diff.SequenceDiff (sequenceDiffSpec) where
 
+import Control.Monad.IO.Class
+import qualified Data.List as List
 import Test.Hspec
 import Test.Hspec.Hedgehog
 import qualified Hedgehog.Range as Range
@@ -28,6 +31,48 @@ genSequenceDiff genA = Gen.int (Range.constant 0 100) >>= go SequenceDiff.empty
         go (f value) (count-1)
       else pure value
 
+data Trace a
+  = Insert Int a (SequenceDiff a) [a]
+  | Replace Int a (SequenceDiff a) [a]
+  | Delete Int (SequenceDiff a) [a]
+  deriving Show
+
+genValidSequenceDiff ::
+  Show a =>
+  (forall x. Gen x -> Gen [x]) ->
+  Gen a ->
+  Gen ([a], [Trace a], SequenceDiff a, [a])
+genValidSequenceDiff genS genA = do
+  n <- Gen.int $ Range.constant 0 100
+  initialSequence <- genS genA
+  (trc, finalDiff, finalSequence) <- go n id SequenceDiff.empty initialSequence
+  pure (initialSequence, trc [], finalDiff, finalSequence)
+  where
+    go 0 t d s = pure (t, d, s)
+    go n t d s = do
+      let len = length s
+      (t', d', s') <-
+        Gen.choice $
+        [ do -- insert
+            ix <- Gen.int $ Range.constant 0 len
+            val <- genA
+            pure (t . (:) (Insert ix val d s), SequenceDiff.insert ix val d, insert ix val s)
+        ] <>
+        (if len > 0
+         then
+           [ do -- replace
+               ix <- Gen.int $ Range.constant 0 (len - 1)
+               val <- genA
+               pure (t . (:) (Replace ix val d s), SequenceDiff.replace ix val d, replace ix val s)
+           , do -- delete
+               ix <- Gen.int $ Range.constant 0 (len - 1)
+               pure (t . (:) (Delete ix d s), SequenceDiff.delete ix d, delete ix s)
+           ]
+         else
+           []
+        )
+      go (n-1) t' d' s'
+
 insert :: Int -> a -> [a] -> [a]
 insert ix val xs = let (prefix, suffix) = splitAt ix xs in prefix ++ val : suffix
 
@@ -40,6 +85,20 @@ replace ix val xs = let (prefix, suffix) = splitAt ix xs in prefix ++ val : tail
 sequenceDiffSpec :: Spec
 sequenceDiffSpec =
   describe "SequenceDiff" $ do
+    describe "generators" $ do
+      it "valid sequence diff" . hedgehog $ do
+        (initial, t, d, final) <-
+          forAll $
+          genValidSequenceDiff
+            (Gen.list $ Range.constant 0 100)
+            (Gen.string (Range.constant 0 100) Gen.alphaNum)
+
+        liftIO $ print (initial, t, d, final)
+
+        let dListIxs = fst <$> SequenceDiff.toList d
+
+        List.nub dListIxs === dListIxs
+        SequenceDiff.apply d initial === final
     describe "unit tests" $ do
       it "toList (insert 0 () empty) = [(0, Insert [()])]" $
         SequenceDiff.toList (SequenceDiff.insert 0 () SequenceDiff.empty) `shouldBe`
@@ -143,8 +202,37 @@ sequenceDiffSpec =
         SequenceDiff.apply (SequenceDiff.replace 2 "c" $ SequenceDiff.insert 0 "b" $ SequenceDiff.insert 0 "a" SequenceDiff.empty) ["0", "1", "2"] `shouldBe`
           ["b", "a", "c", "1", "2"]
 
+      it "apply (replace 0 \"a\" empty) [\"x\"] = [\"a\"]" $ do
+        SequenceDiff.apply (SequenceDiff.replace 0 "a" SequenceDiff.empty) ["x"] `shouldBe`
+          ["a"]
+
+      it "toList (insert 0 \"y\" $ replace 0 \"x\" empty) = [(0, Replace [\"y\", \"x\"])]" $ do
+        SequenceDiff.toList (SequenceDiff.insert 0 "y" $ SequenceDiff.replace 0 "x" SequenceDiff.empty) `shouldBe`
+          [(0, SequenceDiff.Replace ["y", "x"])]
+
+      it "apply (insert 0 \"y\" $ replace 0 \"x\" empty) [\"0\", \"1\"] = [\"y\", \"x\", \"1\"]" $ do
+        SequenceDiff.apply (SequenceDiff.insert 0 "y" $ SequenceDiff.replace 0 "x" SequenceDiff.empty) ["0", "1"] `shouldBe`
+          ["y", "x", "1"]
+
+      it "trace 1" $ do
+        let
+          -- ["0", "1"]
+          _0 = SequenceDiff.empty
+          -- ["0", "1"]
+          _1 = SequenceDiff.insert 0 "a" _0
+          -- ["a", "0", "1"]
+          _2 = SequenceDiff.replace 1 "b" _1
+          -- ["a", "b", "1"]
+          _3 = SequenceDiff.insert 2 "c" _2
+          -- ["a", "b", "1", "c"]
+          _4 = SequenceDiff.insert 0 "d" _3
+          -- ["d", "a", "b", "1", "c"]
+          final = _4
+        SequenceDiff.toList final `shouldBe` [(0, SequenceDiff.Replace ["d", "a", "b"]), (2, SequenceDiff.Insert ["c"])]
+        SequenceDiff.apply final ["0", "1"] `shouldBe` ["d", "a", "b", "1", "c"]
+
     describe "properties" $ do
-      let numTests = 20000
+      let numTests = 100
       modifyMaxSuccess (const numTests) . it "forall ix val cs xs. insert ix val (apply cs xs) = apply (insert ix val cs) xs" . hedgehog $ do
         xs <- forAll $ Gen.list (Range.constant 0 100) genVal
         ix <- forAll $ Gen.int (Range.constant 0 $ length xs) -- you can insert at the end of the list

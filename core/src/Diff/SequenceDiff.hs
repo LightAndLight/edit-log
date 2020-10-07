@@ -62,13 +62,15 @@ insert ix val (SequenceDiff cs) =
                   if currentIx == k
                   then (k, Replace $ pure val) : rest
                   else entry : insertEntry (currentIx - 1) rest
-                Replace{} ->
-                  -- sz = 1
-                  --
-                  -- k <= currentIx <= k + 1, therefore currentIx \in {k, k+1}
-                  if currentIx == k
-                  then (k, Replace $ pure val) : rest
-                  else entry : insertEntry (currentIx - 1) rest
+                Replace vals ->
+                  if currentIx < k + sz
+                  then
+                    let
+                      (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
+                    in
+                      (k, Replace $ foldr NonEmpty.cons (val :| suffix) prefix) : over (mapped._1) (+1) rest
+                  else
+                    entry : insertEntry (currentIx - sz) rest
                 Insert vals ->
                   -- The entry we're inserting should lie somewhere in vals.
                   --
