@@ -6,6 +6,7 @@ module Diff.SequenceDiff
   , empty
   , size
   , insert
+  , replace
   , delete
   , apply
   , toList
@@ -81,6 +82,14 @@ insert ix val (SequenceDiff cs) =
               entry : insertEntry (currentIx - sz) rest
           else
             (currentIx, Insert $ pure val) : entry : rest
+
+replace :: forall a. Int -> a -> SequenceDiff a -> SequenceDiff a
+replace ix val (SequenceDiff cs) = SequenceDiff $ go ix cs
+  where
+    go currentIndex entries =
+      case entries of
+        [] -> [(currentIndex, Replace $ pure val)]
+        entry : rest -> _
 
 delete :: Show a => Int -> SequenceDiff a -> SequenceDiff a
 delete ix (SequenceDiff cs) =
