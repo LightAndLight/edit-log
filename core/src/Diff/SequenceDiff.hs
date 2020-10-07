@@ -89,7 +89,37 @@ replace ix val (SequenceDiff cs) = SequenceDiff $ go ix cs
     go currentIndex entries =
       case entries of
         [] -> [(currentIndex, Replace $ pure val)]
-        entry : rest -> _
+        entry@(k, change) : rest ->
+          let sz = changeSize change in
+          if k <= currentIndex
+          then
+            if currentIndex <= k + sz
+            then
+              case change of
+                Delete ->
+                  error "impossible"
+                Replace vals ->
+                  if currentIndex == k
+                  then
+                    let
+                      (prefix, suffix) = NonEmpty.splitAt (currentIndex - k) vals
+                    in
+                      (k, Replace $ foldr NonEmpty.cons (val :| tail suffix) prefix) : rest
+                  else
+                    entry : go (currentIndex - 1) rest
+                Insert vals ->
+                  if currentIndex < k + sz
+                  then
+                    let
+                      (prefix, suffix) = NonEmpty.splitAt (currentIndex - k) vals
+                    in
+                      (k, Insert $ foldr NonEmpty.cons (val :| tail suffix) prefix) : rest
+                  else
+                    (k, Replace $ vals <> pure val) : rest
+            else
+              entry : go (currentIndex - sz) rest
+          else
+            (currentIndex, Replace $ pure val) : entry : rest
 
 delete :: Show a => Int -> SequenceDiff a -> SequenceDiff a
 delete ix (SequenceDiff cs) =

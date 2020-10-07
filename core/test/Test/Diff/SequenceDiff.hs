@@ -120,8 +120,31 @@ sequenceDiffSpec =
           ) ["0", "1", "2", "3"] `shouldBe`
           ["a", "b", "c", "1", "2", "3"]
 
+      it "toList (replace 0 \"b\" empty) = [(0, Replace [\"b\"])]" $ do
+        SequenceDiff.toList (SequenceDiff.replace 0 "b" $ SequenceDiff.empty) `shouldBe`
+          [(0, SequenceDiff.Replace ["b"])]
+
+      it "apply (replace 0 \"b\" empty) [\"a\"] = [\"b\"]" $ do
+        SequenceDiff.apply (SequenceDiff.replace 0 "b" $ SequenceDiff.empty) ["a"] `shouldBe` ["b"]
+
+      it "toList (replace 2 \"b\" $ insert 0 \"a\" empty)" $ do
+        SequenceDiff.toList (SequenceDiff.replace 2 "b" $ SequenceDiff.insert 0 "a" SequenceDiff.empty) `shouldBe`
+          [(0, SequenceDiff.Insert ["a"]), (1, SequenceDiff.Replace ["b"])]
+
+      it "apply (replace 2 \"b\" $ insert 0 \"a\" empty) [\"0\", \"1\", \"2\"] = [\"a\", \"0\", \"b\", \"2\"]" $ do
+        SequenceDiff.apply (SequenceDiff.replace 2 "b" $ SequenceDiff.insert 0 "a" SequenceDiff.empty) ["0", "1", "2"] `shouldBe`
+          ["a", "0", "b", "2"]
+
+      it "toList (replace 2 \"c\" $ insert 0 \"b\" $ insert 0 \"a\" empty) = [(0, Replace [\"b\", \"a\", \"c\"])]" $ do
+        SequenceDiff.toList (SequenceDiff.replace 2 "c" $ SequenceDiff.insert 0 "b" $ SequenceDiff.insert 0 "a" SequenceDiff.empty) `shouldBe`
+          [(0, SequenceDiff.Replace ["b", "a", "c"])]
+
+      it "apply (replace 2 \"c\" $ insert 0 \"b\" $ insert 0 \"a\" empty) [\"0\", \"1\", \"2\"] = [\"b\", \"a\", \"c\", \"1\", \"2\"]" $ do
+        SequenceDiff.apply (SequenceDiff.replace 2 "c" $ SequenceDiff.insert 0 "b" $ SequenceDiff.insert 0 "a" SequenceDiff.empty) ["0", "1", "2"] `shouldBe`
+          ["b", "a", "c", "1", "2"]
+
     describe "properties" $ do
-      let numTests = 100
+      let numTests = 20000
       modifyMaxSuccess (const numTests) . it "forall ix val cs xs. insert ix val (apply cs xs) = apply (insert ix val cs) xs" . hedgehog $ do
         xs <- forAll $ Gen.list (Range.constant 0 100) genVal
         ix <- forAll $ Gen.int (Range.constant 0 $ length xs) -- you can insert at the end of the list
