@@ -214,6 +214,15 @@ sequenceDiffSpec =
         SequenceDiff.apply (SequenceDiff.insert 0 "y" $ SequenceDiff.replace 0 "x" SequenceDiff.empty) ["0", "1"] `shouldBe`
           ["y", "x", "1"]
 
+      it "toList (insert 3 \"a\" $ replace 1 \"b\" $ insert 0 \"c\" empty) = [(0, Replace [\"a\", \"b\"]), (2, Insert [\"c\"])]" $ do
+        SequenceDiff.toList
+          (SequenceDiff.insert 3 "a" $
+           SequenceDiff.replace 1 "b" $
+           SequenceDiff.insert 0 "c" $
+           SequenceDiff.empty
+          ) `shouldBe`
+          [(0, SequenceDiff.Replace ["c", "b"]), (2, SequenceDiff.Insert ["a"])]
+
       it "trace 1" $ do
         let
           -- ["0", "1"]
@@ -223,13 +232,55 @@ sequenceDiffSpec =
           -- ["a", "0", "1"]
           _2 = SequenceDiff.replace 1 "b" _1
           -- ["a", "b", "1"]
-          _3 = SequenceDiff.insert 2 "c" _2
+          _3 = SequenceDiff.insert 3 "c" _2
           -- ["a", "b", "1", "c"]
           _4 = SequenceDiff.insert 0 "d" _3
           -- ["d", "a", "b", "1", "c"]
           final = _4
-        SequenceDiff.toList final `shouldBe` [(0, SequenceDiff.Replace ["d", "a", "b"]), (2, SequenceDiff.Insert ["c"])]
-        SequenceDiff.apply final ["0", "1"] `shouldBe` ["d", "a", "b", "1", "c"]
+
+        SequenceDiff.toList _2 `shouldBe` [(0, SequenceDiff.Replace ["a", "b"])]
+        SequenceDiff.apply _2 ["0", "1"] `shouldBe` ["a", "b", "1"]
+
+        SequenceDiff.toList _3 `shouldBe` [(0, SequenceDiff.Replace ["a", "b"]), (2, SequenceDiff.Insert ["c"])]
+        SequenceDiff.apply _3 ["0", "1"] `shouldBe` ["a", "b", "1", "c"]
+
+        SequenceDiff.toList _4 `shouldBe` [(0, SequenceDiff.Replace ["d", "a", "b"]), (2, SequenceDiff.Insert ["c"])]
+        SequenceDiff.apply _4 ["0", "1"] `shouldBe` ["d", "a", "b", "1", "c"]
+
+        SequenceDiff.toList final `shouldBe`
+          [(0, SequenceDiff.Replace ["d", "a", "b"]), (2, SequenceDiff.Insert ["c"])]
+
+        SequenceDiff.apply final ["0", "1"] `shouldBe`
+          ["d", "a", "b", "1", "c"]
+
+      it "trace 2" $ do
+        let
+          -- ["0", "1"]
+          _0 = SequenceDiff.empty
+          -- ["0", "1"]
+          _1 = SequenceDiff.delete 0 _0
+          -- ["1"]
+          _2 = SequenceDiff.insert 1 "a" _1
+          -- ["1", "a"]
+
+        SequenceDiff.toList _2 `shouldBe` [(0, SequenceDiff.Delete), (2, SequenceDiff.Insert ["a"])]
+        SequenceDiff.apply _2 ["0", "1"] `shouldBe` ["1", "a"]
+
+      it "trace 3" $ do
+        let
+          -- ["0", "1", "2"]
+          _0 = SequenceDiff.empty
+          -- ["0", "1", "2"]
+          _1 = SequenceDiff.delete 1 _0
+          -- ["0", "2"]
+          _2 = SequenceDiff.replace 1 "a" _1
+          -- ["0", "a"]
+
+        SequenceDiff.toList _1 `shouldBe` [(1, SequenceDiff.Delete)]
+        SequenceDiff.apply _1 ["0", "1", "2"] `shouldBe` ["0", "2"]
+
+        SequenceDiff.toList _2 `shouldBe` [(1, SequenceDiff.Delete), (2, SequenceDiff.Replace ["a"])]
+        SequenceDiff.apply _2 ["0", "1", "2"] `shouldBe` ["0", "a"]
 
     describe "properties" $ do
       let numTests = 100

@@ -13,7 +13,6 @@ module Diff.SequenceDiff
   )
 where
 
-import Control.Lens (over, mapped, _1)
 import qualified Data.IntMap as IntMap
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NonEmpty
@@ -27,9 +26,9 @@ data Change a
 changeSize :: Change a -> Int
 changeSize change =
   case change of
-    Insert as -> length as
+    Insert vals -> length vals
     Delete -> 1
-    Replace as -> length as
+    Replace vals -> length vals - 1
 
 newtype SequenceDiff a = SequenceDiff [(Int, Change a)]
   deriving (Eq, Show)
@@ -45,32 +44,27 @@ insert ix val (SequenceDiff cs) =
   SequenceDiff $ insertEntry ix cs
   where
     insertEntry :: Int -> [(Int, Change a)] -> [(Int, Change a)]
+    --          3         [(0, Replace [x, y])]
     insertEntry currentIx orderedCs =
       case orderedCs of
         [] -> [(currentIx, Insert $ pure val)]
+        --     0  Replace [x, y]
         entry@(k, change) : rest ->
+          --  2
           let sz = changeSize change in
+          -- 0    3
           if k <= currentIx
           then
             if currentIx <= k + sz
             then
               case change of
                 Delete ->
-                  -- sz = 1
-                  --
-                  -- k <= currentIx <= k + 1, therefore currentIx \in {k, k+1}
-                  if currentIx == k
-                  then (k, Replace $ pure val) : rest
-                  else entry : insertEntry (currentIx - 1) rest
+                  entry : insertEntry (currentIx + 1) rest
                 Replace vals ->
-                  if currentIx < k + sz
-                  then
-                    let
-                      (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
-                    in
-                      (k, Replace $ foldr NonEmpty.cons (val :| suffix) prefix) : over (mapped._1) (+1) rest
-                  else
-                    entry : insertEntry (currentIx - sz) rest
+                  let
+                    (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
+                  in
+                    (k, Replace $ foldr NonEmpty.cons (val :| suffix) prefix) : rest
                 Insert vals ->
                   -- The entry we're inserting should lie somewhere in vals.
                   --
@@ -79,7 +73,7 @@ insert ix val (SequenceDiff cs) =
                   let
                     (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
                   in
-                    (k, Insert $ foldr NonEmpty.cons (val :| suffix) prefix) : over (mapped._1) (+1) rest
+                    (k, Insert $ foldr NonEmpty.cons (val :| suffix) prefix) : rest
             else
               entry : insertEntry (currentIx - sz) rest
           else
@@ -99,7 +93,7 @@ replace ix val (SequenceDiff cs) = SequenceDiff $ go ix cs
             then
               case change of
                 Delete ->
-                  error "impossible"
+                  entry : go (currentIndex + 1) rest
                 Replace vals ->
                   if currentIndex == k
                   then
@@ -108,7 +102,7 @@ replace ix val (SequenceDiff cs) = SequenceDiff $ go ix cs
                     in
                       (k, Replace $ foldr NonEmpty.cons (val :| tail suffix) prefix) : rest
                   else
-                    entry : go (currentIndex - 1) rest
+                    entry : go (currentIndex - sz) rest
                 Insert vals ->
                   if currentIndex < k + sz
                   then
@@ -138,37 +132,37 @@ delete ix (SequenceDiff cs) =
             then
               case change of
                 Delete ->
-                  error "impossible"
+                  if currentIx == k
+                  then entries
+                  else entry : go (currentIx + 1) rest
                 Replace vals ->
                   if currentIx < k + sz
                   then
                     let
                       (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
-                      rest' = over (mapped._1) (subtract 1) rest
                     in
                       case NonEmpty.nonEmpty (prefix <> tail suffix) of
-                        Nothing -> rest'
+                        Nothing -> rest
                         Just vals' ->
-                          (k, Insert vals') : rest'
+                          (k, Insert vals') : rest
                   else
                     entry : go (currentIx - sz) rest
                 Insert vals ->
-                  let rest' = over (mapped._1) (subtract 1) rest in
                   if currentIx < k + sz
                   then
                     let
                       (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
                     in
                       case NonEmpty.nonEmpty (prefix <> tail suffix) of
-                        Nothing -> rest'
+                        Nothing -> rest
                         Just vals' ->
-                          (k, Insert vals') : rest'
+                          (k, Insert vals') : rest
                   else
                     case rest of
                       x : _ | fst x == currentIx ->
                         entry : go (currentIx - sz) rest
                       _ ->
-                        (k, Replace vals) : rest'
+                        (k, Replace vals) : rest
             else
               entry : go (currentIx - sz) rest
           else
