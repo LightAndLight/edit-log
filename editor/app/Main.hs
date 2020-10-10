@@ -657,7 +657,33 @@ editor initial initialFocus = do
     dFocus :: Dynamic t (Focus a) <-
       holdDyn
         initialFocus
-        (fmapMaybe (\case; Select path -> Just $ Focus path; _ -> Nothing) eNode)
+        (fmapMaybe
+           (\case
+              Select path -> Just $ Focus path
+              ContextMenuEvent event ->
+                case event of
+                  Choose path entry ->
+                    Just $ case entry of
+                      EntryTrue -> Focus path
+                      EntryFalse -> Focus path
+                      EntryInt -> Focus path
+                      EntryAdd -> Focus $ Path.snoc path BinOp_Left
+                      EntrySubtract -> Focus $ Path.snoc path BinOp_Left
+                      EntryMultiply -> Focus $ Path.snoc path BinOp_Left
+                      EntryDivide -> Focus $ Path.snoc path BinOp_Left
+                      EntryOr -> Focus $ Path.snoc path BinOp_Left
+                      EntryAnd -> Focus $ Path.snoc path BinOp_Left
+                      EntryNot -> Focus $ Path.snoc path UnOp_Value
+                      EntryNeg -> Focus $ Path.snoc path UnOp_Value
+                      EntryFor -> Focus $ Path.snoc path For_Expr
+                      EntryIfThen -> Focus $ Path.snoc path IfThen_Cond
+                      EntryIfThenElse -> Focus $ Path.snoc path IfThenElse_Cond
+                      EntryPrint -> Focus $ Path.snoc path Print_Value
+                  _ -> Nothing
+              _ -> Nothing
+           )
+           eNode
+        )
 
     dMenu <-
       foldDyn
