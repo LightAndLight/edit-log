@@ -1,4 +1,5 @@
 {-# language BangPatterns #-}
+{-# language DeriveFunctor, DeriveFoldable, DeriveTraversable #-}
 {-# language ScopedTypeVariables #-}
 module Diff.SequenceDiff
   ( SequenceDiff
@@ -25,7 +26,7 @@ data Change a
   = Replace (NonEmpty a)
   | Insert (NonEmpty a)
   | Delete
-  deriving (Eq, Show)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
 
 changeSize :: Change a -> Int
 changeSize change =
