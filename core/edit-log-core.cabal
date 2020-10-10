@@ -16,7 +16,6 @@ extra-source-files:  CHANGELOG.md
 library
   exposed-modules:     
                        Diff
-                     , Diff.DeleteSet
                      , Diff.SequenceDiff
                      , Hash
                      , Log
@@ -62,7 +61,6 @@ test-suite edit-log-core-test
                      , Gen.Node
                      , Gen.NodeType
                      , Gen.Syntax
-                     , Test.Diff.DeleteSet
                      , Test.Diff.SequenceDiff
                      , Test.Hash
                      , Test.NodeType
