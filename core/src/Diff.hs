@@ -6,17 +6,18 @@
 module Diff where
 
 import Data.Foldable (foldlM, foldl')
-import Data.Function (on)
-import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Type.Equality ((:~:)(..))
 
+import Diff.SequenceDiff (SequenceDiff)
+import qualified Diff.SequenceDiff as SequenceDiff
 import Hash (Hash)
 import qualified Log
+import Node (Node(..))
 import Path (Level(..), Path(..), eqLevel)
 import qualified Path
-import Store (MonadStore, setH)
+import Store (MonadStore)
 import qualified Store
 import Syntax (Block, Statement(..))
 
@@ -48,80 +49,13 @@ setEntry level d entries =
             Nothing -> pure $ Entry level d
             Just rest -> NonEmpty.cons (Entry level d) rest
 
-newtype InsertPositions
-  = InsertPositions [(Int, [Hash Statement])]
-  deriving Show
-
-getPosition :: Int -> InsertPositions -> Maybe (Hash Statement)
-getPosition ix (InsertPositions ps) = go ps
-  where
-    go :: [(Int, [Hash Statement])] -> Maybe (Hash Statement)
-    go positions =
-      case positions of
-        [] -> Nothing
-        (positionIndex, positionInserts) : rest
-          | let adjustedIx = ix - positionIndex
-          , 0 <= adjustedIx && adjustedIx < length positionInserts ->
-              Just $ positionInserts !! adjustedIx
-          | otherwise -> go rest
-
--- replace existing entry
-setPosition :: Int -> Hash Statement -> InsertPositions -> InsertPositions
-setPosition ix val (InsertPositions ps) = InsertPositions $ go ps
-  where
-    go :: [(Int, [Hash Statement])] -> [(Int, [Hash Statement])]
-    go positions =
-      case positions of
-        [] -> []
-        p@(positionIndex, positionInserts) : rest
-          | let adjustedIx = ix - positionIndex
-          , 0 <= adjustedIx && adjustedIx < length positionInserts ->
-              let
-                (prefix, more) = splitAt adjustedIx positionInserts
-              in
-                case more of
-                  [] -> error "impossible"
-                  _ : suffix -> (positionIndex, prefix ++ val : suffix) : go rest
-          | otherwise -> p : go rest
-
--- insert entry, or replace if it already exists
-insertPosition ::
-  forall m.
-  MonadStore m =>
-  Int ->
-  Hash Statement ->
-  InsertPositions ->
-  m InsertPositions
-insertPosition ix val (InsertPositions ps) = InsertPositions <$> go ps
-  where
-    go :: [(Int, [Hash Statement])] -> m [(Int, [Hash Statement])]
-    go positions =
-      case positions of
-        [] -> pure [(ix, [val])]
-        p@(positionIndex, positionInserts) : rest
-          | let adjustedIx = ix - positionIndex
-          , 0 <= adjustedIx ->
-            case compare adjustedIx (length positionInserts) of
-              LT ->
-                let
-                  (prefix, more) = splitAt adjustedIx positionInserts
-                in
-                  case more of
-                    [] -> error "impossible"
-                    _ : suffix -> pure $ (positionIndex, prefix ++ val : suffix) : rest
-              _ -> do
-                h <- Store.addStatement SHole
-                let holes = replicate (adjustedIx - length positionInserts) h
-                pure $ (positionIndex, positionInserts ++ holes ++ [val]) : rest
-          | otherwise -> (p :) <$> go rest
-
 data LeafChange :: * -> * where
   ReplaceLeaf :: { changeOld :: Hash a, changeNew :: Hash a } -> LeafChange a
-  InsertLeaf :: InsertPositions -> LeafChange Block
+  EditBlockLeaf :: SequenceDiff (Hash Statement) -> LeafChange Block
 deriving instance Show (LeafChange a)
 
 data BranchChange :: * -> * where
-  InsertBranch :: InsertPositions -> BranchChange Block
+  EditBlockBranch :: SequenceDiff (Hash Statement) -> BranchChange Block
 deriving instance Show (BranchChange a)
 
 data Diff a where
@@ -137,24 +71,30 @@ applyChange :: MonadStore m => Path a b -> LeafChange b -> Hash a -> m (Maybe (H
 applyChange p c h =
   case c of
     ReplaceLeaf _ newInner -> do
-      m_res <- setH p (pure newInner) h
+      m_res <- Store.setH p (pure newInner) h
       pure $ Store.rootHash <$> m_res
-    InsertLeaf (InsertPositions positions) ->
-      Store.insertH p positions h
+    EditBlockLeaf changes ->
+      Store.modifyH
+        p
+        (\blockHash -> do
+           mNode <- Store.lookupNode blockHash
+           case mNode of
+             Nothing ->
+               pure blockHash
+             Just (NBlock statementHashes) ->
+               Store.addNode $ NBlock (SequenceDiff.apply changes statementHashes)
+        )
+        h
 
-insertPositionsBranchChange ::
+editBlockBranchChange ::
   MonadStore m =>
-  InsertPositions ->
+  SequenceDiff (Hash Statement) ->
   BranchChange Block ->
   m (BranchChange Block)
-insertPositionsBranchChange (InsertPositions positions) change =
-  case change of
-    InsertBranch positions' ->
-      InsertBranch <$>
-      foldlM
-        (\acc (ix, h) -> insertPosition ix h acc)
-        positions'
-        (positions >>= \(ix, ps) -> zip [ix..] ps)
+editBlockBranchChange newChanges existingBranchChange =
+  case existingBranchChange of
+    EditBlockBranch existingChanges ->
+      pure . EditBlockBranch $ SequenceDiff.after newChanges existingChanges
 
 insert :: MonadStore m => Path a b -> LeafChange b -> Diff a -> m (Diff a)
 insert p c currentDiff =
@@ -165,13 +105,13 @@ insert p c currentDiff =
         Branch m_branchChange ms ->
           case c of
             ReplaceLeaf{} -> pure $ Leaf c
-            InsertLeaf positions ->
+            EditBlockLeaf newChanges ->
               case m_branchChange of
                 Nothing ->
-                  pure $ Branch (Just $ InsertBranch positions) ms
-                Just branchChange ->
+                  pure $ Branch (Just $ EditBlockBranch newChanges) ms
+                Just existingBranchChange ->
                   (\branchChange' -> Branch (Just branchChange') ms) <$>
-                  insertPositionsBranchChange positions branchChange
+                  editBlockBranchChange newChanges existingBranchChange
         Leaf{} -> pure $ Leaf c
     Cons l p' ->
       case currentDiff of
@@ -194,24 +134,24 @@ insert p c currentDiff =
               pure $ case m_newOuter' of
                 Nothing -> currentDiff
                 Just newOuter' -> Leaf $ ReplaceLeaf old newOuter'
-            InsertLeaf positions ->
+            EditBlockLeaf changes ->
               case l of
                 Block_Index ix ->
-                  case getPosition ix positions of
-                    Nothing -> do
+                  case SequenceDiff.valueAt ix changes of
+                    SequenceDiff.Unknown -> do
                       -- there is an insert change, but there also needs to be other changes applied to existing
                       -- (non-inserted) block indices
                       entry <- Entry l <$> insert p' c emptyDiff
-                      pure $ Branch (Just $ InsertBranch positions) (pure entry)
-                    Just statementh -> do
+                      pure $ Branch (Just $ EditBlockBranch changes) (pure entry)
+                    SequenceDiff.Known statementh -> do
                       m_statementh' <- applyChange p' c statementh
                       pure $ case m_statementh' of
                         Nothing -> currentDiff
                         Just statementh' ->
                           let
-                            positions' = setPosition ix statementh' positions
+                            changes' = SequenceDiff.replace ix statementh' changes
                           in
-                            Leaf $ InsertLeaf positions'
+                            Leaf $ EditBlockLeaf changes'
 
 traversal ::
   forall a b.
@@ -246,10 +186,30 @@ toDiff =
          Log.Replace path old new ->
            insert path (ReplaceLeaf old new) acc
          Log.Insert path ix new ->
-           insert path (InsertLeaf $ InsertPositions [(ix, [new])]) acc
+           insert path (EditBlockLeaf $ SequenceDiff.insert ix new SequenceDiff.empty) acc
          Log.Delete path ix old -> error "TODO: translate Delete into diff entry" path ix old
     )
     emptyDiff
+
+fromEditBlock ::
+  Path a Block ->
+  SequenceDiff (Hash Statement) ->
+  [Log.Entry a]
+fromEditBlock path changes =
+  -- the log entries appear in reverse, because inserting the very last 'position'
+  -- first doesn't invalidate the indices of all the other inserts
+  foldl'
+    (\res (curIx, change) ->
+       case change of
+         SequenceDiff.Insert vals ->
+           foldl (\vs v -> Log.Insert path curIx v : vs) res vals
+         SequenceDiff.Replace vals ->
+           error "TODO: translate Replace into log entries" vals
+         SequenceDiff.Delete ->
+           error "TODO: translate Delete into log entries"
+    )
+    []
+    (SequenceDiff.toList changes)
 
 fromDiff :: forall a. Diff a -> [Log.Entry a]
 fromDiff = go Nil
@@ -258,23 +218,15 @@ fromDiff = go Nil
     go path d =
       case d of
         Empty -> []
-        Leaf change ->
-          case change of
+        Leaf leafChange ->
+          case leafChange of
             ReplaceLeaf old new -> [Log.Replace path old new]
-            InsertLeaf (InsertPositions positions) ->
-              -- the log entries appear in reverse, because inserting the very last 'position'
-              -- first doesn't invalidate the indices of all the other inserts
-              foldl'
-                (\res (curIx, vals) ->
-                  foldl (\vs v -> Log.Insert path curIx v : vs) res vals
-                )
-                []
-                (List.sortBy (compare `on` fst) positions)
+            EditBlockLeaf changes -> fromEditBlock path changes
         Branch branchChange entries ->
           foldMap
             (\change ->
                case change of
-                 InsertBranch positions -> error "TODO: translate Insert into log entry" positions
+                 EditBlockBranch changes -> fromEditBlock path changes
             )
             branchChange <>
           (NonEmpty.toList entries >>= \(Entry level d') -> go (Path.snoc path level) d')

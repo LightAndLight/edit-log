@@ -114,6 +114,9 @@ delete ix xs = let (prefix, suffix) = splitAt ix xs in prefix ++ tail suffix
 replace :: Int -> a -> [a] -> [a]
 replace ix val xs = let (prefix, suffix) = splitAt ix xs in prefix ++ val : tail suffix
 
+index :: Int -> [a] -> Maybe a
+index ix xs = lookup ix $ zip [0..] xs
+
 sequenceDiffSpec :: Spec
 sequenceDiffSpec =
   describe "SequenceDiff" $ do
@@ -336,6 +339,12 @@ sequenceDiffSpec =
           ) `shouldBe`
           [(0, SequenceDiff.Replace ["b"]), (1, SequenceDiff.Replace ["a"])]
 
+      it "toList (replace 0 \"a\" empty) = [(0, Replace [\"a\"])]" $ do
+        SequenceDiff.toList (SequenceDiff.replace 0 "a" SequenceDiff.empty) `shouldBe` [(0, SequenceDiff.Replace ["a"])]
+
+      it "valueAt 0 (replace 0 \"a\" empty) = Just \"a\"" $ do
+        SequenceDiff.valueAt 0 (SequenceDiff.replace 0 "a" SequenceDiff.empty) `shouldBe` SequenceDiff.Known "a"
+
       it "trace 1" $ do
         let
           -- ["0", "1"]
@@ -389,7 +398,7 @@ sequenceDiffSpec =
           _2 = SequenceDiff.replace 1 "a" _1
           -- ["0", "a"]
 
-        SequenceDiff.toList _1 `shouldBe` [(1, SequenceDiff.Delete)]
+        SequenceDiff.toList _1 `shouldBe` [(1, SequenceDiff.Delete :: SequenceDiff.Change String)]
         SequenceDiff.apply _1 ["0", "1", "2"] `shouldBe` ["0", "2"]
 
         SequenceDiff.toList _2 `shouldBe` [(1, SequenceDiff.Delete), (2, SequenceDiff.Replace ["a"])]
@@ -489,3 +498,47 @@ sequenceDiffSpec =
         val <- forAll genVal
         SequenceDiff.delete (ix+1) (SequenceDiff.insert ix val cs) ===
           SequenceDiff.replace ix val cs
+
+      modifyMaxSuccess (const numTests) . it "forall cs. after empty cs = cs" . hedgehog $ do
+        (cs, _) <- forAll $ genSequenceDiff defaultConfig genVal
+        SequenceDiff.after SequenceDiff.empty cs === cs
+
+      modifyMaxSuccess (const numTests) . it "forall cs. after cs empty = cs" . hedgehog $ do
+        (cs, _) <- forAll $ genSequenceDiff defaultConfig genVal
+        SequenceDiff.after cs SequenceDiff.empty === cs
+
+      modifyMaxSuccess (const numTests) . it "forall cs. apply cs' (apply cs xs) = apply (after cs' cs) xs" . hedgehog $ do
+        xs <- forAll $ Gen.list (Range.constant 0 100) genVal
+        (cs, xs') <- forAll $ genSequenceDiff (defaultConfig { initialValue = xs }) genVal
+        (cs', _) <- forAll $ genSequenceDiff (defaultConfig { initialValue = xs' }) genVal
+        SequenceDiff.apply cs' (SequenceDiff.apply cs xs) === SequenceDiff.apply (SequenceDiff.after cs' cs) xs
+
+      describe "valueAt" $ do
+        it "forall ix val cs. valueAt ix (insert ix val cs) = Known val" . hedgehog $ do
+          xs <- forAll $ Gen.list (Range.constant 0 100) genVal
+          (cs, xs') <- forAll $ genSequenceDiff (defaultConfig { initialValue = xs })genVal
+          ix <- forAll $ Gen.int (Range.constant 0 $ length xs')
+          val <- forAll genVal
+
+          let changes = SequenceDiff.insert ix val cs
+          SequenceDiff.valueAt ix changes === SequenceDiff.Known val
+          index ix (SequenceDiff.apply changes xs) === Just val
+
+        it "forall ix val cs. valueAt ix (replace ix val cs) = Known val" . hedgehog $ do
+          xs <- forAll $ Gen.list (Range.constant 0 100) genVal
+          (cs, xs') <- forAll $ genSequenceDiff (defaultConfig { initialValue = xs, minFinalSize = 1 }) genVal
+          ix <- forAll $ Gen.int (Range.constant 0 $ length xs' - 1)
+          val <- forAll genVal
+
+          let changes = SequenceDiff.replace ix val cs
+          SequenceDiff.valueAt ix changes === SequenceDiff.Known val
+          index ix (SequenceDiff.apply changes xs) === Just val
+
+        it "forall ix val cs. valueAt ix (delete ix empty) = Unknown" . hedgehog $ do
+          xs <- forAll $ Gen.list (Range.constant 1 100) genVal
+          ix <- forAll $ Gen.int (Range.constant 0 $ length xs - 1)
+
+          let
+            changes :: SequenceDiff String
+            changes = SequenceDiff.delete ix SequenceDiff.empty
+          SequenceDiff.valueAt ix changes === SequenceDiff.Unknown

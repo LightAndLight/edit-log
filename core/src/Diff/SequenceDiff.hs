@@ -4,16 +4,20 @@ module Diff.SequenceDiff
   ( SequenceDiff
   , Change(..)
   , empty
+  , after
   , size
   , insert
   , replace
   , delete
   , apply
+  , ValueAt(..)
+  , valueAt
   , toList
   )
 where
 
 import qualified Data.IntMap as IntMap
+import Data.Foldable (foldl')
 import Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NonEmpty
 
@@ -110,7 +114,7 @@ replace ix val (SequenceDiff cs) = SequenceDiff $ go ix cs
           else
             (currentIndex, Replace $ pure val) : entry : rest
 
-delete :: Show a => Int -> SequenceDiff a -> SequenceDiff a
+delete :: Int -> SequenceDiff a -> SequenceDiff a
 delete ix (SequenceDiff cs) =
   SequenceDiff $ go ix cs
   where
@@ -151,6 +155,31 @@ delete ix (SequenceDiff cs) =
           else
             (currentIx, Delete) : entry : rest
 
+after :: SequenceDiff a -> SequenceDiff a -> SequenceDiff a
+after newChanges existingChanges =
+  snd $
+  foldl'
+    (\(ixShift, acc) (ix, change) ->
+       let sz = changeSize change in
+       ( ixShift + sz
+       , case change of
+           Insert vals ->
+             foldl'
+               (\acc' val -> insert (ix+ixShift) val acc')
+               acc
+               (reverse $ NonEmpty.toList vals)
+           Replace vals ->
+             let slav = reverse . NonEmpty.toList $ vals in
+             foldl'
+               (\acc' val -> insert (ix+ixShift) val acc')
+               (replace (ix+ixShift) (head slav) acc)
+               (tail slav)
+           Delete -> delete (ix+ixShift) acc
+       )
+    )
+    (0, existingChanges)
+    (toList newChanges)
+
 apply :: SequenceDiff a -> [a] -> [a]
 apply (SequenceDiff cs) xs =
   let
@@ -181,3 +210,44 @@ apply (SequenceDiff cs) xs =
 
 toList :: SequenceDiff a -> [(Int, Change a)]
 toList (SequenceDiff cs) = cs
+
+data ValueAt a
+  = Known a
+  | Unknown
+  deriving (Eq, Show)
+
+valueAt :: Int -> SequenceDiff a -> ValueAt a
+valueAt ix = go ix . toList
+  where
+    go !currentIx cs =
+      case cs of
+        [] -> Unknown
+        (k, change) : rest ->
+          let sz = changeSize change in
+          if k <= currentIx
+          then
+            if currentIx <= k + sz
+            then
+              case change of
+                Insert vals ->
+                  if currentIx < k + sz
+                  then
+                    let
+                      (_, suffix) =
+                        NonEmpty.splitAt (currentIx - k) vals
+                    in
+                      Known $ head suffix
+                  else
+                    go (currentIx - sz) rest
+                Replace vals ->
+                  let
+                    (_, suffix) =
+                      NonEmpty.splitAt (currentIx - k) vals
+                  in
+                    Known $ head suffix
+                Delete ->
+                  Unknown
+            else
+              go (currentIx - sz) rest
+          else
+            go (currentIx - sz) rest
