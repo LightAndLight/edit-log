@@ -20,7 +20,13 @@ executable editor
   build-depends:       base ^>=4.12.0.0
                      , edit-log-editor
                      , edit-log-core
+                     , containers
+                     , ghcjs-dom
+                     , jsaddle
                      , reflex
                      , reflex-dom
+                     , text
+                     , transformers
   hs-source-dirs:      app
   default-language:    Haskell2010
+  ghc-options:         -Wall -Werror
