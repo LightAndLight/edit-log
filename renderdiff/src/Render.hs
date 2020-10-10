@@ -5,15 +5,14 @@
 module Render where
 
 import Data.Foldable (sequence_, traverse_)
-import Data.Function (on)
 import Data.Functor.Identity (runIdentity)
-import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty(..))
 import Text.Blaze.Html5 (Html, (!))
 import qualified Text.Blaze.Html5 as Html
 import qualified Text.Blaze.Html5.Attributes as Attr
 
 import Diff (Diff)
+import qualified Diff.SequenceDiff as SequenceDiff
 import qualified Diff as Diff
 import Hash (Hash)
 import Path (Level(..))
@@ -21,11 +20,43 @@ import Store (MonadStore)
 import qualified Store
 import Syntax (Ident(..), Statement(..), Expr(..), Block(..), BinOp(..), UnOp(..))
 
-renderInsertedStatement :: (Int, Statement) -> Html
-renderInsertedStatement (_, new) =
-  Html.div ! Attr.class_ ("diff statement") $ do
-    Html.div ! Attr.class_ "diff-added diff-insert" $ do
-      renderStatement new
+renderStandaloneBlockChange :: (Int, SequenceDiff.Change Statement) -> Html
+renderStandaloneBlockChange (_, change) =
+  Html.div ! Attr.class_ ("diff statement") $
+  case change of
+    SequenceDiff.Insert vals ->
+      Html.div ! Attr.class_ "diff-added diff-insert" $ do
+        traverse_ renderStatement vals
+    SequenceDiff.Replace{} ->
+      error $ "replace is not a standlone change"
+    SequenceDiff.Delete ->
+      error $ "delete is not a standalone change"
+
+renderOverlaidBlockChange ::
+  Monad m =>
+  ((Int, Statement) -> m Html) ->
+  (Int, SequenceDiff.Change Statement) ->
+  (Int, Statement) ->
+  m Html
+renderOverlaidBlockChange renderOldStatement (_, change) old = do
+  oldHtml <- renderOldStatement old
+  pure $
+    case change of
+      SequenceDiff.Insert vals -> do
+        oldHtml
+        Html.div ! Attr.class_ ("diff statement") $
+          Html.div ! Attr.class_ "diff-added diff-insert" $
+            traverse_ renderStatement vals
+      SequenceDiff.Replace vals ->
+        Html.div ! Attr.class_ ("diff statement") $ do
+          Html.div ! Attr.class_ "diff-removed diff-top" $
+            oldHtml
+          Html.div ! Attr.class_ "diff-added diff-bottom" $ do
+            traverse_ renderStatement vals
+      SequenceDiff.Delete ->
+        Html.div ! Attr.class_ ("diff statement") $ do
+          Html.div ! Attr.class_ "diff-removed" $
+            oldHtml
 
 renderLeafChange ::
   MonadStore m =>
@@ -51,47 +82,48 @@ renderLeafChange nodeType change item render =
                   render old
                 Html.div ! Attr.class_ "diff-added diff-bottom" $ do
                   render new
-    Diff.InsertLeaf (Diff.InsertPositions positions) | Block statements <- item -> do
+    Diff.EditBlockLeaf changes | Block statements <- item -> do
       let
-        positions' :: [(Int, Hash Statement)]
-        positions' =
-          List.sortBy (compare `on` fst ) positions >>=
-          \(ix, vals) -> fmap (\(pos, val) -> (ix+pos, val)) (zip [0..] vals)
+        changes' :: [(Int, SequenceDiff.Change (Hash Statement))]
+        changes' = SequenceDiff.toList changes
 
-      positions'' :: [(Int, Statement)] <-
-        traverse
-          (\(ix, valh) -> do
+      changes'' :: [(Int, SequenceDiff.Change Statement)] <-
+        (traverse.traverse.traverse)
+          (\valh -> do
              m_val <- Store.rebuild valh
              case m_val of
                Nothing -> error $ "failed to rebuild " <> show valh
-               Just val -> pure (ix, val)
+               Just val -> pure val
           )
-          positions'
+          changes'
 
       let
         statements' :: [(Int, Statement)]
         statements' = zip [0..] statements
 
-      pure $ overlayPositions positions'' statements'
+      pure $ overlayBlockChanges changes'' statements'
   where
-    overlayPositions ::
-      [(Int, Statement)] ->
+    overlayBlockChanges ::
+      [(Int, SequenceDiff.Change Statement)] ->
       [(Int, Statement)] ->
       Html
-    overlayPositions news olds =
+    overlayBlockChanges news olds =
       case news of
         [] -> traverse_ (renderStatement . snd) olds
         new : newRest ->
           case olds of
-            [] -> traverse_ renderInsertedStatement news
+            [] -> traverse_ renderStandaloneBlockChange news
             old : oldRest ->
-              if fst new <= fst old
-              then do -- render the new one
-                renderInsertedStatement new
-                overlayPositions newRest olds
-              else do -- render the old one
-                renderStatement $ snd old
-                overlayPositions news oldRest
+              case compare (fst new) (fst old) of
+                LT -> do -- render the new one
+                  renderStandaloneBlockChange new
+                  overlayBlockChanges newRest olds
+                EQ -> do
+                  runIdentity $ renderOverlaidBlockChange (pure . renderStatement . snd) new old
+                  overlayBlockChanges newRest oldRest
+                GT -> do -- render the old one
+                  renderStatement $ snd old
+                  overlayBlockChanges news oldRest
 
 renderBlock_Statements :: Monad m => ([Statement] -> m Html) -> [Statement] -> m Html
 renderBlock_Statements fSts sts = do
@@ -129,28 +161,26 @@ renderBlockWithDiff block diff =
                   pure $ sequence_ htmls
                 Just branchChange ->
                   case branchChange of
-                    Diff.InsertBranch (Diff.InsertPositions positions) -> do
+                    Diff.EditBlockBranch changes -> do
                       let
-                        positions' :: [(Int, Hash Statement)]
-                        positions' =
-                          List.sortBy (compare `on` fst ) positions >>=
-                          \(ix, vals) -> fmap (\(pos, val) -> (ix+pos, val)) (zip [0..] vals)
+                        changes' :: [(Int, SequenceDiff.Change (Hash Statement))]
+                        changes' = SequenceDiff.toList changes
 
-                      positions'' :: [(Int, Statement)] <-
-                        traverse
-                          (\(ix, valh) -> do
+                      changes'' :: [(Int, SequenceDiff.Change Statement)] <-
+                        (traverse.traverse.traverse)
+                          (\valh -> do
                             m_val <- Store.rebuild valh
                             case m_val of
                               Nothing -> error $ "failed to rebuild " <> show valh
-                              Just val -> pure (ix, val)
+                              Just val -> pure val
                           )
-                          positions'
+                          changes'
 
                       let
                         sts' :: [(Int, Statement)]
                         sts' = zip [0..] sts
 
-                      blockHtml <- overlayPositions (renderStatementIndexed entries) positions'' sts'
+                      blockHtml <- overlayBlockChanges (renderStatementIndexed entries) changes'' sts'
 
                       pure blockHtml
             )
@@ -162,30 +192,36 @@ renderBlockWithDiff block diff =
         Nothing -> pure $ renderStatement st
         Just diff' -> renderStatementWithDiff st diff'
 
-    overlayPositions ::
+    overlayBlockChanges ::
       ((Int, Statement) -> m Html) ->
-      [(Int, Statement)] ->
+      [(Int, SequenceDiff.Change Statement)] ->
       [(Int, Statement)] ->
       m Html
-    overlayPositions renderOldStatement news olds =
+    overlayBlockChanges renderOldStatement news olds =
       case news of
         [] -> sequence_ <$> traverse renderOldStatement olds
         new : newRest ->
           case olds of
-            [] -> pure $ traverse_ (renderStatement . snd) news
+            [] -> pure $ traverse_ renderStandaloneBlockChange news
             old : oldRest ->
-              if fst new <= fst old
-              then do -- render the new one
-                restHtml <- overlayPositions renderOldStatement newRest olds
-                pure $ do
-                  renderInsertedStatement new
-                  restHtml
-              else do -- render the old one
-                oldHtml <- renderOldStatement old
-                restHtml <- overlayPositions renderOldStatement news oldRest
-                pure $ do
-                  oldHtml
-                  restHtml
+              case compare (fst new) (fst old) of
+                LT -> do -- render the new one
+                  restHtml <- overlayBlockChanges renderOldStatement newRest olds
+                  pure $ do
+                    renderStandaloneBlockChange new
+                    restHtml
+                EQ -> do
+                  currentHtml <- renderOverlaidBlockChange renderOldStatement new old
+                  restHtml <- overlayBlockChanges renderOldStatement newRest oldRest
+                  pure $ do
+                    currentHtml
+                    restHtml
+                GT -> do -- render the old one
+                  oldHtml <- renderOldStatement old
+                  restHtml <- overlayBlockChanges renderOldStatement news oldRest
+                  pure $ do
+                    oldHtml
+                    restHtml
 
 withDiff ::
   (Applicative m, Foldable f) =>
