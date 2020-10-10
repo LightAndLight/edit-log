@@ -95,9 +95,11 @@ newVersioned a = Versioned store newLog ctx
     ctx = Context { initial = a, root = initialh }
 
 instance Monad m => MonadVersioned a (VersionedT a m) where
+  getRoot = VersionedT $ gets root
+
   replace :: forall b. KnownNodeType b => Path a b -> b -> VersionedT a m (Maybe (Time, Entry a))
   replace path value = do
-    rooth <- VersionedT $ gets root
+    rooth <- getRoot
     m_res <-
       Store.setH
         path
@@ -116,7 +118,7 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         pure $ Just (t, entry)
 
   replaceH path valueh = do
-    rooth <- VersionedT $ gets root
+    rooth <- getRoot
     m_res <- Store.setH path (pure valueh) rooth
     case m_res of
       Nothing -> pure Nothing
@@ -133,7 +135,7 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
 
   insertH :: Path a Block -> (Int, Hash Statement) -> VersionedT a m (Maybe (Time, Entry a))
   insertH path (ix, sth) = do
-    rooth <- VersionedT $ gets root
+    rooth <- getRoot
     m_rooth' <- Store.insertH path [(ix, [sth])] rooth
     case m_rooth' of
       Nothing -> pure Nothing
@@ -144,7 +146,7 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         pure $ Just (t, entry)
 
   snapshot = do
-    m_res <- rebuild =<< VersionedT (gets root)
+    m_res <- rebuild =<< getRoot
     case m_res of
       Nothing -> error "corrupt log: missing a hash"
       Just res -> (, res) <$> getPhysicalTime

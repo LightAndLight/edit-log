@@ -26,7 +26,8 @@ runSessionT ::
   Monad m =>
   Versioned a ->
   Session (Time, Entry a) ->
-  SessionT a m b -> m (b, Versioned a, Session (Time, Entry a))
+  SessionT a m b ->
+  m (b, Versioned a, Session (Time, Entry a))
 runSessionT v s m = do
   ((res, s'), v') <- runVersionedT v $ runStateT (unSessionT m) s
   pure (res, v', s')
@@ -54,6 +55,8 @@ instance Monad m => MonadVersioned a (SessionT a m) where
   insertH p h = trackVersioned $ insertH p h
 
   snapshot = SessionT $ lift snapshot
+
+  getRoot = SessionT $ lift getRoot
 
 instance Monad m => MonadSession (Time, Entry a) (SessionT a m) where
   undo = do

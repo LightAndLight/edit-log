@@ -1,0 +1,26 @@
+cabal-version:       2.4
+
+name:                edit-log-editor
+version:             0.1.0.0
+license:             BSD-3-Clause
+license-file:        LICENSE
+author:              Isaac Elliott
+maintainer:          isaace71295@gmail.com
+category:            Web
+extra-source-files:  CHANGELOG.md
+
+library
+  exposed-modules:     MyLib
+  build-depends:       base ^>=4.12.0.0
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+
+executable editor
+  main-is:             Main.hs
+  build-depends:       base ^>=4.12.0.0
+                     , edit-log-editor
+                     , edit-log-core
+                     , reflex
+                     , reflex-dom
+  hs-source-dirs:      app
+  default-language:    Haskell2010

@@ -20,6 +20,8 @@ class Monad m => MonadVersioned a m | m -> a where
 
   snapshot :: m (Time, a)
 
+  getRoot :: m (Hash a)
+
 instance MonadVersioned a m => MonadVersioned a (StateT s m) where
   replace p a = lift $ replace p a
   replaceH p h = lift $ replaceH p h
@@ -28,3 +30,5 @@ instance MonadVersioned a m => MonadVersioned a (StateT s m) where
   insertH p a = lift $ insertH p a
 
   snapshot = lift snapshot
+
+  getRoot = lift getRoot

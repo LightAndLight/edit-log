@@ -33,11 +33,11 @@ library
                      , Versioned.Pure
   build-depends:       base ^>=4.12.0.0
                      , containers
+                     , dependent-sum
                      , dependent-sum-template
                      , hashable
                      , lens
                      , mtl
-                     , some
                      , transformers >= 0.5
                      , unordered-containers
   hs-source-dirs:      src
@@ -71,5 +71,4 @@ test-suite edit-log-core-test
                      , hspec
                      , hspec-hedgehog
                      , hedgehog
-                     , some
   ghc-options:         -Wall -Werror
