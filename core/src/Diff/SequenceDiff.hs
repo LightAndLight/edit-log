@@ -27,7 +27,7 @@ changeSize :: Change a -> Int
 changeSize change =
   case change of
     Insert vals -> length vals
-    Delete -> 1
+    Delete -> -1
     Replace vals -> length vals - 1
 
 newtype SequenceDiff a = SequenceDiff [(Int, Change a)]
@@ -41,25 +41,21 @@ size (SequenceDiff cs) = length cs
 
 insert :: forall a. Int -> a -> SequenceDiff a -> SequenceDiff a
 insert ix val (SequenceDiff cs) =
-  SequenceDiff $ insertEntry ix cs
+  SequenceDiff $ go ix cs
   where
-    insertEntry :: Int -> [(Int, Change a)] -> [(Int, Change a)]
-    --          3         [(0, Replace [x, y])]
-    insertEntry currentIx orderedCs =
+    go :: Int -> [(Int, Change a)] -> [(Int, Change a)]
+    go currentIx orderedCs =
       case orderedCs of
         [] -> [(currentIx, Insert $ pure val)]
-        --     0  Replace [x, y]
         entry@(k, change) : rest ->
-          --  2
           let sz = changeSize change in
-          -- 0    3
           if k <= currentIx
           then
             if currentIx <= k + sz
             then
               case change of
                 Delete ->
-                  entry : insertEntry (currentIx + 1) rest
+                  entry : go (currentIx + 1) rest
                 Replace vals ->
                   let
                     (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
@@ -75,7 +71,7 @@ insert ix val (SequenceDiff cs) =
                   in
                     (k, Insert $ foldr NonEmpty.cons (val :| suffix) prefix) : rest
             else
-              entry : insertEntry (currentIx - sz) rest
+              entry : go (currentIx - sz) rest
           else
             (currentIx, Insert $ pure val) : entry : rest
 
@@ -86,6 +82,7 @@ replace ix val (SequenceDiff cs) = SequenceDiff $ go ix cs
       case entries of
         [] -> [(currentIndex, Replace $ pure val)]
         entry@(k, change) : rest ->
+          --  1
           let sz = changeSize change in
           if k <= currentIndex
           then
@@ -95,14 +92,10 @@ replace ix val (SequenceDiff cs) = SequenceDiff $ go ix cs
                 Delete ->
                   entry : go (currentIndex + 1) rest
                 Replace vals ->
-                  if currentIndex == k
-                  then
-                    let
-                      (prefix, suffix) = NonEmpty.splitAt (currentIndex - k) vals
-                    in
-                      (k, Replace $ foldr NonEmpty.cons (val :| tail suffix) prefix) : rest
-                  else
-                    entry : go (currentIndex - sz) rest
+                  let
+                    (prefix, suffix) = NonEmpty.splitAt (currentIndex - k) vals
+                  in
+                    (k, Replace $ foldr NonEmpty.cons (val :| tail suffix) prefix) : rest
                 Insert vals ->
                   if currentIndex < k + sz
                   then
@@ -132,21 +125,15 @@ delete ix (SequenceDiff cs) =
             then
               case change of
                 Delete ->
-                  if currentIx == k
-                  then entries
-                  else entry : go (currentIx + 1) rest
+                  entry : go (currentIx + 1) rest
                 Replace vals ->
-                  if currentIx < k + sz
-                  then
-                    let
-                      (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
-                    in
-                      case NonEmpty.nonEmpty (prefix <> tail suffix) of
-                        Nothing -> rest
-                        Just vals' ->
-                          (k, Insert vals') : rest
-                  else
-                    entry : go (currentIx - sz) rest
+                  let
+                    (prefix, suffix) = NonEmpty.splitAt (currentIx - k) vals
+                  in
+                    case NonEmpty.nonEmpty (prefix <> tail suffix) of
+                      Nothing -> (k, Delete) : rest
+                      Just vals' ->
+                        (k, Replace vals') : rest
                 Insert vals ->
                   if currentIx < k + sz
                   then
@@ -158,11 +145,7 @@ delete ix (SequenceDiff cs) =
                         Just vals' ->
                           (k, Insert vals') : rest
                   else
-                    case rest of
-                      x : _ | fst x == currentIx ->
-                        entry : go (currentIx - sz) rest
-                      _ ->
-                        (k, Replace vals) : rest
+                    (k, Replace vals) : rest
             else
               entry : go (currentIx - sz) rest
           else
