@@ -5,8 +5,11 @@ module Syntax where
 import Data.Hashable (Hashable)
 import GHC.Generics (Generic)
 
-newtype Ident = Ident String
-  deriving (Eq, Hashable, Show)
+data Ident
+  = Ident String
+  | IHole
+  deriving (Eq, Generic, Show)
+instance Hashable Ident
 
 newtype Block
   = Block [Statement]

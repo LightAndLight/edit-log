@@ -261,6 +261,8 @@ contextMenuEntries controls path = do
           , EntryPrint
           , EntryDef
           ]
+        TIdent ->
+          renderEntries dHighlighted []
   pure eContextMenu
   where
     renderEntries :: Dynamic t Int -> [ContextMenuEntry b] -> m (Int, Event t (ContextMenuEvent a))
@@ -287,9 +289,11 @@ renderIdent ::
   DomBuilder t m =>
   Ident ->
   m ()
-renderIdent (Ident i) =
-  syntaxNode mempty $ do
-  Dom.text $ Text.pack i
+renderIdent i =
+  syntaxNode mempty $
+  case i of
+    Ident n -> Dom.text $ Text.pack n
+    IHole -> Dom.text "_"
 
 syntaxInline :: DomBuilder t m => Attrs -> m a -> m a
 syntaxInline attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-inline" <> attrs
@@ -362,6 +366,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
            TExpr -> "class" =: "syntax-expr"
            TBlock -> "class" =: "syntax-block"
            TStatement -> "class" =: "syntax-statement"
+           TIdent -> "class" =: "syntax-ident"
         ) <>
         fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
         if inFocus then pure ("class" =: "syntax-focused") else mempty
@@ -374,11 +379,27 @@ renderNode contextMenuControls controls menu versioned focus path h = do
             (never, mempty) <$ Dom.text "error: missing node"
           Just node ->
             case node of
+              NIdent n ->
+                (never, mempty) <$ Dom.text (Text.pack n)
+              NIHole ->
+                (never, mempty) <$ Dom.text "_"
+
               NFor ident val body -> do
-                (eForExpr, forExprInfo) <-
+                ((eForIdent, forIdentInfo), (eForExpr, forExprInfo)) <-
                   syntaxLine mempty $ do
                     syntaxKeyword mempty $ Dom.text "for"
-                    renderIdent ident
+                    eForIdent <-
+                      renderNode
+                        contextMenuControls
+                        controls
+                        menu
+                        versioned
+                        (case focus of
+                          Focus (Cons For_Ident focusPath) -> Focus focusPath
+                          _ -> NoFocus
+                        )
+                        (Path.snoc path For_Ident)
+                        ident
                     syntaxKeyword mempty $ Dom.text "in"
                     eForExpr <-
                       renderNode
@@ -393,7 +414,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                         (Path.snoc path For_Expr)
                         val
                     syntaxSymbol mempty $ Dom.text ":"
-                    pure eForExpr
+                    pure (eForIdent, eForExpr)
                 (eForBlock, forBlockInfo) <-
                   syntaxNested mempty $
                   renderNode
@@ -407,7 +428,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                     )
                     (Path.snoc path For_Block)
                     body
-                pure (leftmost [eForExpr, eForBlock], forExprInfo <> forBlockInfo)
+                pure (leftmost [eForIdent, eForExpr, eForBlock], forIdentInfo <> forExprInfo <> forBlockInfo)
               NIfThen cond then_ -> do
                 (eIfThenCond, ifThenCondInfo) <-
                   syntaxLine mempty $ do
@@ -507,20 +528,34 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                     (Path.snoc path Print_Value)
                     val
               NDef name args body -> do
-                syntaxLine mempty $ do
-                  syntaxKeyword mempty $ Dom.text "def"
-                  renderIdent name
-                  case args of
-                    [] -> syntaxSymbol mempty $ Dom.text "()"
-                    a : as -> do
-                      syntaxSymbol mempty $ Dom.text "("
-                      renderIdent a
-                      for_ as $ \x -> do
-                        syntaxSymbol mempty $ Dom.text ","
-                        renderIdent x
-                      syntaxSymbol mempty $ Dom.text ")"
-                  syntaxSymbol mempty $ Dom.text ":"
-                syntaxNested mempty $
+                (eDefName, defNameInfo) <-
+                  syntaxLine mempty $ do
+                    syntaxKeyword mempty $ Dom.text "def"
+                    defName <-
+                      renderNode
+                        contextMenuControls
+                        controls
+                        menu
+                        versioned
+                        (case focus of
+                            Focus (Cons Def_Name focusPath) -> Focus focusPath
+                            _ -> NoFocus
+                        )
+                        (Path.snoc path Def_Name)
+                        name
+                    case args of
+                      [] -> syntaxSymbol mempty $ Dom.text "()"
+                      a : as -> do
+                        syntaxSymbol mempty $ Dom.text "("
+                        renderIdent a
+                        for_ as $ \x -> do
+                          syntaxSymbol mempty $ Dom.text ","
+                          renderIdent x
+                        syntaxSymbol mempty $ Dom.text ")"
+                    syntaxSymbol mempty $ Dom.text ":"
+                    pure defName
+                (eDefBody, defBodyInfo) <-
+                  syntaxNested mempty $
                   renderNode
                     contextMenuControls
                     controls
@@ -532,6 +567,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                     )
                     (Path.snoc path Def_Body)
                     body
+                pure (leftmost [eDefName, eDefBody], defNameInfo <> defBodyInfo)
               NBool b ->
                 ((never, mempty) <$) . syntaxKeyword mempty . Dom.text $
                 if b then "true" else "false"
@@ -618,6 +654,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
               TBlock -> "block"
               TExpr -> "expr"
               TStatement -> "statement"
+              TIdent -> "identifier"
             ) <> " menu"
           contextMenuEntries contextMenuControls path
       _ ->
@@ -764,7 +801,7 @@ editor initial initialFocus = do
                        EntryIfThen -> IfThen EHole (Block [SHole])
                        EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
                        EntryPrint -> Print EHole
-                       EntryDef -> Def (Ident "f") [Ident "x"] (Block [SHole])
+                       EntryDef -> Def IHole [Ident "x"] (Block [SHole])
                    _ -> Nothing
                Select path -> Just . SetFocus $ Focus path
                _ -> Nothing

@@ -14,7 +14,7 @@ import Hash (Hash)
 import Node (Node(..))
 import NodeType (KnownNodeType)
 import Path (Path(..), Level(..))
-import Syntax (Expr(..), Statement(..), Block(..))
+import Syntax (Expr(..), Statement(..), Block(..), Ident(..))
 
 class Monad m => MonadStore m where
   lookupNode :: Hash a -> m (Maybe (Node a))
@@ -41,7 +41,12 @@ modifyH path_ f_ = runMaybeT . go path_ f_
         Cons l rest -> do
           n <- MaybeT $ lookupNode rooth
           case l of
-            For_Ident -> empty
+            For_Ident ->
+              case n of
+                NFor identh exprh bodyh -> do
+                  identh' <- go rest f identh
+                  lift . addNode $ NFor identh' exprh bodyh
+                _ -> empty
             For_Expr ->
               case n of
                 NFor ident exprh bodyh -> do
@@ -94,11 +99,17 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                   lift . addNode $ NPrint valh'
                 _ -> empty
 
+            Def_Name ->
+              case n of
+                NDef nameh args bodyh -> do
+                  nameh' <- go rest f nameh
+                  lift . addNode $ NDef nameh' args bodyh
+                _ -> empty
             Def_Body ->
               case n of
-                NDef name args bodyh -> do
+                NDef nameh args bodyh -> do
                   bodyh' <- go rest f bodyh
-                  lift . addNode $ NDef name args bodyh'
+                  lift . addNode $ NDef nameh args bodyh'
                 _ -> empty
 
             BinOp_Left ->
@@ -151,19 +162,25 @@ setH path_ val_ = runMaybeT . go path_ val_
         Cons l rest -> do
           n <- MaybeT $ lookupNode rooth
           case l of
-            For_Ident -> empty
+            For_Ident ->
+              case n of
+                NFor identh exprh bodyh -> do
+                  res <- go rest mval identh
+                  rooth' <- lift . addNode $ NFor (rootHash res) exprh bodyh
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
             For_Expr ->
               case n of
-                NFor ident exprh bodyh -> do
+                NFor identh exprh bodyh -> do
                   res <- go rest mval exprh
-                  rooth' <- lift . addNode $ NFor ident (rootHash res) bodyh
+                  rooth' <- lift . addNode $ NFor identh (rootHash res) bodyh
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
             For_Block ->
               case n of
-                NFor ident exprh bodyh -> do
+                NFor identh exprh bodyh -> do
                   res <- go rest mval bodyh
-                  rooth' <- lift . addNode $ NFor ident exprh (rootHash res)
+                  rooth' <- lift . addNode $ NFor identh exprh (rootHash res)
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
@@ -212,11 +229,18 @@ setH path_ val_ = runMaybeT . go path_ val_
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
+            Def_Name ->
+              case n of
+                NDef nameh args bodyh -> do
+                  res <- go rest mval nameh
+                  rooth' <- lift . addNode $ NDef (rootHash res) args bodyh
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
             Def_Body ->
               case n of
-                NDef name args bodyh -> do
+                NDef nameh args bodyh -> do
                   res <- go rest mval bodyh
-                  rooth' <- lift . addNode $ NDef name args (rootHash res)
+                  rooth' <- lift . addNode $ NDef nameh args (rootHash res)
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
@@ -312,7 +336,8 @@ rebuild = runMaybeT . go
         Just node ->
           case node of
             NFor ident ex body ->
-              For ident <$>
+              For <$>
+              go ident <*>
               go ex <*>
               go body
             NIfThen cond then_ ->
@@ -327,7 +352,9 @@ rebuild = runMaybeT . go
             NPrint val ->
               Print <$> go val
             NDef name args body ->
-              Def name args <$>
+              Def <$>
+              go name <*>
+              pure args <*>
               go body
 
             NBool b -> pure $ Bool b
@@ -342,8 +369,18 @@ rebuild = runMaybeT . go
             NBlock sts ->
               Block <$> traverse go sts
 
+            NIdent i ->
+              pure $ Ident i
+
             NSHole -> pure SHole
             NEHole -> pure EHole
+            NIHole -> pure IHole
+
+addIdent :: MonadStore m => Ident -> m (Hash Ident)
+addIdent i =
+  case i of
+    Ident n -> addNode $ NIdent n
+    IHole -> addNode NIHole
 
 addExpr :: MonadStore m => Expr -> m (Hash Expr)
 addExpr e =
@@ -363,9 +400,10 @@ addStatement :: MonadStore m => Statement -> m (Hash Statement)
 addStatement s =
   case s of
     For ident expr body -> do
+      identh <- addIdent ident
       exprh <- addExpr expr
       bodyh <- addBlock body
-      addNode $ NFor ident exprh bodyh
+      addNode $ NFor identh exprh bodyh
     IfThen cond then_ -> do
       condh <- addExpr cond
       then_h <- addBlock then_
@@ -379,8 +417,9 @@ addStatement s =
       valh <- addExpr val
       addNode $ NPrint valh
     Def name args body -> do
+      nameh <- addIdent name
       bodyh <- addBlock body
-      addNode $ NDef name args bodyh
+      addNode $ NDef nameh args bodyh
     SHole -> addNode NSHole
 
 addBlock :: MonadStore m => Block -> m (Hash Block)
@@ -402,8 +441,7 @@ getH path h =
           case l of
             For_Ident ->
               case node of
-                NFor ident _ _ ->
-                  error "TODO idents aren't hashed" ident
+                NFor ident _ _ -> getH rest ident
                 _ -> pure Nothing
             For_Expr ->
               case node of
@@ -436,6 +474,10 @@ getH path h =
             Print_Value ->
               case node of
                 NPrint val -> getH rest val
+                _ -> pure Nothing
+            Def_Name ->
+              case node of
+                NDef name _ _ -> getH rest name
                 _ -> pure Nothing
             Def_Body ->
               case node of

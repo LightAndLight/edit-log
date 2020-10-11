@@ -24,7 +24,7 @@ import Log (MonadLog, Time, Entry(..), append, getEntries, getPhysicalTime)
 import Log.Pure (LogT, runLogT, Log, newLog)
 import Path (Path(..))
 import qualified Path
-import Store (MonadStore, addExpr, addStatement, addBlock, rebuild)
+import Store (MonadStore, addExpr, addStatement, addBlock, addIdent, rebuild)
 import qualified Store
 import Store.Pure (StoreT, runStoreT, Store, newStore)
 import Syntax (Statement, Block)
@@ -92,6 +92,7 @@ newVersioned a = Versioned store newLog ctx
           TExpr -> addExpr a
           TStatement -> addStatement a
           TBlock -> addBlock a
+          TIdent -> addIdent a
     ctx = Context { initial = a, root = initialh }
 
 instance Monad m => MonadVersioned a (VersionedT a m) where
@@ -104,9 +105,10 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
       Store.setH
         path
         (case nodeType @b of
-            TExpr -> addExpr value
-            TStatement -> addStatement value
-            TBlock -> addBlock value
+           TExpr -> addExpr value
+           TStatement -> addStatement value
+           TBlock -> addBlock value
+           TIdent -> addIdent value
         )
         rooth
     case m_res of

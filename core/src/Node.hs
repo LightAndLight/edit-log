@@ -15,11 +15,11 @@ import NodeType (KnownNodeType)
 import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident)
 
 data Node :: * -> * where
-  NFor :: Ident -> Hash Expr -> Hash Block -> Node Statement
+  NFor :: Hash Ident -> Hash Expr -> Hash Block -> Node Statement
   NIfThen :: Hash Expr -> Hash Block -> Node Statement
   NIfThenElse :: Hash Expr -> Hash Block -> Hash Block -> Node Statement
   NPrint :: Hash Expr -> Node Statement
-  NDef :: Ident -> [Ident] -> Hash Block -> Node Statement
+  NDef :: Hash Ident -> [Ident] -> Hash Block -> Node Statement
 
   NBool :: Bool -> Node Expr
   NInt :: Int -> Node Expr
@@ -28,8 +28,11 @@ data Node :: * -> * where
 
   NBlock :: [Hash Statement] -> Node Block
 
+  NIdent :: String -> Node Ident
+
   NSHole :: Node Statement
   NEHole :: Node Expr
+  NIHole :: Node Ident
 deriving instance Show (Node a)
 deriveGEq ''Node
 deriveGShow ''Node
@@ -63,6 +66,9 @@ instance Hashable (Node a) where
       NPrint e -> hashWithSalt s (10::Int, e)
       NDef name args body -> hashWithSalt s (11::Int, name, args, body)
 
+      NIdent i -> hashWithSalt s (12::Int, i)
+      NIHole -> hashWithSalt s (13::Int)
+
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
   case n of
@@ -79,5 +85,8 @@ hashNode n =
 
     NBlock{} -> HBlock $ hash n
 
+    NIdent{} -> HIdent $ hash n
+
     NSHole -> HStatement $ hash n
     NEHole -> HExpr $ hash n
+    NIHole -> HIdent $ hash n

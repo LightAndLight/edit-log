@@ -35,7 +35,8 @@ findNextHole v = go
       let Identity (mNode, _) = runVersionedT v $ Store.lookupNode h
       node <- mNode
       case node of
-        NFor _ expr body ->
+        NFor ident expr body ->
+          go (Path.snoc path For_Ident) ident <|>
           go (Path.snoc path For_Expr) expr <|>
           go (Path.snoc path For_Block) body
         NIfThen cond then_ ->
@@ -47,7 +48,8 @@ findNextHole v = go
           go (Path.snoc path IfThenElse_Else) else_
         NPrint val ->
           go (Path.snoc path Print_Value) val
-        NDef _ _ body ->
+        NDef name _ body ->
+          go (Path.snoc path Def_Name) name <|>
           go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
@@ -61,8 +63,10 @@ findNextHole v = go
           foldMap
             (\(ix, st) -> Alt $ go (Path.snoc path $ Block_Index ix) st)
             (zip [0..] sts)
+        NIdent{} -> Nothing
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
+        NIHole -> Just $ Focus path
 
 nextHole :: forall a b. Versioned a -> Path a b -> Maybe (Focus a)
 nextHole v focusPath = do
@@ -89,7 +93,11 @@ nextHole v focusPath = do
               case l of
                 For_Ident ->
                   case node of
-                    NFor ident _ _ -> error "TODO idents aren't hashed" ident
+                    NFor ident expr body ->
+                      searchTree (Path.snoc context For_Ident) path' ident <>
+                      [ SearchEntry (Path.snoc context For_Expr) expr
+                      , SearchEntry (Path.snoc context For_Block) body
+                      ]
                     _ -> []
                 For_Expr ->
                   case node of
@@ -137,6 +145,12 @@ nextHole v focusPath = do
                     NPrint val ->
                       searchTree (Path.snoc context Print_Value) path' val
                     _ -> []
+                Def_Name ->
+                  case node of
+                    NDef name _ body ->
+                      searchTree (Path.snoc context Def_Name) path' name <>
+                      [ SearchEntry (Path.snoc context Def_Body) body ]
+                    _ -> []
                 Def_Body ->
                   case node of
                     NDef _ _ body ->
@@ -178,7 +192,8 @@ findPrevHole v = go
       let Identity (mNode, _) = runVersionedT v $ Store.lookupNode h
       node <- mNode
       case node of
-        NFor _ expr body ->
+        NFor ident expr body ->
+          go (Path.snoc path For_Ident) ident <|>
           go (Path.snoc path For_Block) body <|>
           go (Path.snoc path For_Expr) expr
         NIfThen cond then_ ->
@@ -190,7 +205,8 @@ findPrevHole v = go
           go (Path.snoc path IfThenElse_Cond) cond
         NPrint val ->
           go (Path.snoc path Print_Value) val
-        NDef _ _ body ->
+        NDef name _ body ->
+          go (Path.snoc path Def_Name) name <|>
           go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
@@ -204,8 +220,10 @@ findPrevHole v = go
           foldMap
             (\(ix, st) -> Alt $ go (Path.snoc path $ Block_Index ix) st)
             (reverse $ zip [0..] sts)
+        NIdent{} -> Nothing
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
+        NIHole -> Just $ Focus path
 
 prevHole :: forall a b. Versioned a -> Path a b -> Maybe (Focus a)
 prevHole v focusPath = do
@@ -232,18 +250,22 @@ prevHole v focusPath = do
               case l of
                 For_Ident ->
                   case node of
-                    NFor ident _ _ -> error "TODO idents aren't hashed" ident
+                    NFor ident _ _ ->
+                      searchTree (Path.snoc context For_Ident) path' ident
                     _ -> []
                 For_Expr ->
                   case node of
-                    NFor _ expr _ ->
-                      searchTree (Path.snoc context For_Expr) path' expr
+                    NFor ident expr _ ->
+                      searchTree (Path.snoc context For_Expr) path' expr <>
+                      [ SearchEntry (Path.snoc context For_Ident) ident ]
                     _ -> []
                 For_Block ->
                   case node of
-                    NFor _ expr body ->
+                    NFor ident expr body ->
                       searchTree (Path.snoc context For_Block) path' body <>
-                      [ SearchEntry (Path.snoc context For_Expr) expr ]
+                      [ SearchEntry (Path.snoc context For_Expr) expr
+                      , SearchEntry (Path.snoc context For_Ident) ident
+                      ]
                     _ -> []
                 IfThen_Cond ->
                   case node of
@@ -280,10 +302,16 @@ prevHole v focusPath = do
                     NPrint val ->
                       searchTree (Path.snoc context Print_Value) path' val
                     _ -> []
+                Def_Name ->
+                  case node of
+                    NDef name _ _ ->
+                      searchTree (Path.snoc context Def_Name) path' name
+                    _ -> []
                 Def_Body ->
                   case node of
-                    NDef _ _ body ->
-                      searchTree (Path.snoc context Def_Body) path' body
+                    NDef name _ body ->
+                      searchTree (Path.snoc context Def_Body) path' body <>
+                      [ SearchEntry (Path.snoc context Def_Name) name ]
                     _ -> []
                 BinOp_Left ->
                   case node of
