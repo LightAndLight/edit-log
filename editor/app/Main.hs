@@ -624,6 +624,7 @@ data EditAction a where
   Replace :: KnownNodeType b => Path a b -> b -> EditAction a
   NextHole :: EditAction a
   PrevHole :: EditAction a
+  SetFocus :: Focus a -> EditAction a
 
 data EditorState a
   = EditorState
@@ -701,6 +702,7 @@ editor initial initialFocus = do
                         prevHole versioned' path
                       NoFocus ->
                         prevHole versioned' Nil
+                  SetFocus newFocus -> newFocus
             in
               EditorState { esVersioned = versioned', esSession = session', esFocus = focus' }
         )
@@ -734,6 +736,7 @@ editor initial initialFocus = do
                        EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
                        EntryPrint -> Print EHole
                    _ -> Nothing
+               Select path -> Just . SetFocus $ Focus path
                _ -> Nothing
              )
              eNode
