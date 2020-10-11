@@ -56,6 +56,8 @@ data Level :: * -> * -> * where
 
   Print_Value :: Level Statement Expr
 
+  Def_Body :: Level Statement Block
+
   BinOp_Left :: Level Expr Expr
   BinOp_Right :: Level Expr Expr
 
@@ -102,6 +104,10 @@ eqLevel l1 l2 =
     Print_Value ->
       case l2 of
         Print_Value -> Just Refl
+        _ -> Nothing
+    Def_Body ->
+      case l2 of
+        Def_Body -> Just Refl
         _ -> Nothing
     BinOp_Left ->
       case l2 of
@@ -186,6 +192,13 @@ traversal p f a =
               traversal p' f val
             _ -> pure a
 
+        Def_Body ->
+          case a of
+            Def name args body ->
+              Def name args <$>
+              traversal p' f body
+            _ -> pure a
+
         BinOp_Left ->
           case a of
             BinOp op left right ->
@@ -231,6 +244,7 @@ showingLevelTarget l f =
     IfThenElse_Then -> f
     IfThenElse_Else -> f
     Print_Value -> f
+    Def_Body -> f
     BinOp_Left -> f
     BinOp_Right -> f
     UnOp_Value -> f

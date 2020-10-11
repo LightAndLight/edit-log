@@ -94,6 +94,13 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                   lift . addNode $ NPrint valh'
                 _ -> empty
 
+            Def_Body ->
+              case n of
+                NDef name args bodyh -> do
+                  bodyh' <- go rest f bodyh
+                  lift . addNode $ NDef name args bodyh'
+                _ -> empty
+
             BinOp_Left ->
               case n of
                 NBinOp op lefth righth -> do
@@ -205,6 +212,14 @@ setH path_ val_ = runMaybeT . go path_ val_
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
+            Def_Body ->
+              case n of
+                NDef name args bodyh -> do
+                  res <- go rest mval bodyh
+                  rooth' <- lift . addNode $ NDef name args (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
+
             BinOp_Left ->
               case n of
                 NBinOp op lefth righth -> do
@@ -311,6 +326,9 @@ rebuild = runMaybeT . go
               go else_
             NPrint val ->
               Print <$> go val
+            NDef name args body ->
+              Def name args <$>
+              go body
 
             NBool b -> pure $ Bool b
             NInt n -> pure $ Int n
@@ -360,6 +378,9 @@ addStatement s =
     Print val -> do
       valh <- addExpr val
       addNode $ NPrint valh
+    Def name args body -> do
+      bodyh <- addBlock body
+      addNode $ NDef name args bodyh
     SHole -> addNode NSHole
 
 addBlock :: MonadStore m => Block -> m (Hash Block)
@@ -415,6 +436,10 @@ getH path h =
             Print_Value ->
               case node of
                 NPrint val -> getH rest val
+                _ -> pure Nothing
+            Def_Body ->
+              case node of
+                NDef _ _ body -> getH rest body
                 _ -> pure Nothing
             BinOp_Left ->
               case node of

@@ -17,6 +17,7 @@ data Statement
   | IfThen Expr Block
   | IfThenElse Expr Block Block
   | Print Expr
+  | Def Ident [Ident] Block
   | SHole
   deriving Show
 

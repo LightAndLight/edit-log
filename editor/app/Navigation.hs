@@ -47,6 +47,8 @@ findNextHole v = go
           go (Path.snoc path IfThenElse_Else) else_
         NPrint val ->
           go (Path.snoc path Print_Value) val
+        NDef _ _ body ->
+          go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
         NBinOp _ left right ->
@@ -135,6 +137,11 @@ nextHole v focusPath = do
                     NPrint val ->
                       searchTree (Path.snoc context Print_Value) path' val
                     _ -> []
+                Def_Body ->
+                  case node of
+                    NDef _ _ body ->
+                      searchTree (Path.snoc context Def_Body) path' body
+                    _ -> []
                 BinOp_Left ->
                   case node of
                     NBinOp _ left right->
@@ -183,6 +190,8 @@ findPrevHole v = go
           go (Path.snoc path IfThenElse_Cond) cond
         NPrint val ->
           go (Path.snoc path Print_Value) val
+        NDef _ _ body ->
+          go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
         NBinOp _ left right ->
@@ -270,6 +279,11 @@ prevHole v focusPath = do
                   case node of
                     NPrint val ->
                       searchTree (Path.snoc context Print_Value) path' val
+                    _ -> []
+                Def_Body ->
+                  case node of
+                    NDef _ _ body ->
+                      searchTree (Path.snoc context Def_Body) path' body
                     _ -> []
                 BinOp_Left ->
                   case node of

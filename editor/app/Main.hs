@@ -189,6 +189,7 @@ data ContextMenuEntry :: * -> * where
   EntryIfThen :: ContextMenuEntry Statement
   EntryIfThenElse :: ContextMenuEntry Statement
   EntryPrint :: ContextMenuEntry Statement
+  EntryDef :: ContextMenuEntry Statement
 deriving instance Show (ContextMenuEntry a)
 
 entryTitle :: ContextMenuEntry a -> Text
@@ -210,6 +211,7 @@ entryTitle entry =
     EntryIfThen -> "if then"
     EntryIfThenElse -> "if then else"
     EntryPrint -> "print"
+    EntryDef -> "function definition"
 
 data ContextMenuEvent a where
   Choose :: KnownNodeType b => Path a b -> ContextMenuEntry b -> ContextMenuEvent a
@@ -257,6 +259,7 @@ contextMenuEntries controls path = do
           , EntryIfThen
           , EntryIfThenElse
           , EntryPrint
+          , EntryDef
           ]
   pure eContextMenu
   where
@@ -503,6 +506,32 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                     )
                     (Path.snoc path Print_Value)
                     val
+              NDef name args body -> do
+                syntaxLine mempty $ do
+                  syntaxKeyword mempty $ Dom.text "def"
+                  renderIdent name
+                  case args of
+                    [] -> syntaxSymbol mempty $ Dom.text "()"
+                    a : as -> do
+                      syntaxSymbol mempty $ Dom.text "("
+                      renderIdent a
+                      for_ as $ \x -> do
+                        syntaxSymbol mempty $ Dom.text ","
+                        renderIdent x
+                      syntaxSymbol mempty $ Dom.text ")"
+                  syntaxSymbol mempty $ Dom.text ":"
+                syntaxNested mempty $
+                  renderNode
+                    contextMenuControls
+                    controls
+                    menu
+                    versioned
+                    (case focus of
+                        Focus (Cons Def_Body focusPath) -> Focus focusPath
+                        _ -> NoFocus
+                    )
+                    (Path.snoc path Def_Body)
+                    body
               NBool b ->
                 ((never, mempty) <$) . syntaxKeyword mempty . Dom.text $
                 if b then "true" else "false"
@@ -735,6 +764,7 @@ editor initial initialFocus = do
                        EntryIfThen -> IfThen EHole (Block [SHole])
                        EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
                        EntryPrint -> Print EHole
+                       EntryDef -> Def (Ident "f") [Ident "x"] (Block [SHole])
                    _ -> Nothing
                Select path -> Just . SetFocus $ Focus path
                _ -> Nothing
