@@ -24,6 +24,7 @@ import qualified GHCJS.DOM.GlobalEventHandlers as Events
 import qualified GHCJS.DOM.KeyboardEvent as KeyboardEvent
 import JSDOM.Types (HTMLInputElement)
 import qualified JSDOM.HTMLElement as HTMLElement
+import qualified JSDOM.HTMLInputElement as HTMLInputElement
 import qualified JSDOM.Types as JSDOM
 import Language.Javascript.JSaddle.Monad (MonadJSM)
 import Reflex
@@ -194,6 +195,8 @@ data ContextMenuEntry :: * -> * where
   EntryIfThenElse :: ContextMenuEntry Statement
   EntryPrint :: ContextMenuEntry Statement
   EntryDef :: ContextMenuEntry Statement
+
+  EntryIdent :: String -> ContextMenuEntry Ident
 deriving instance Show (ContextMenuEntry a)
 
 entryTitle :: ContextMenuEntry a -> Text
@@ -216,6 +219,8 @@ entryTitle entry =
     EntryIfThenElse -> "if then else"
     EntryPrint -> "print"
     EntryDef -> "function definition"
+
+    EntryIdent i -> Text.pack i
 
 data ContextMenuEvent a where
   Choose :: KnownNodeType b => Path a b -> ContextMenuEntry b -> ContextMenuEvent a
@@ -263,10 +268,16 @@ contextMenuEntries controls path = do
       foldDyn
         ($)
         TextInput
-        (mergeWith (.) [menuNext count <$ cmcNext controls, menuPrev count <$ cmcPrev controls])
+        (mergeWith
+           (.)
+           [ menuNext count <$ cmcNext controls
+           , menuPrev count <$ cmcPrev controls
+           , const TextInput <$ ffilter id (updated dInputFocused)
+           ])
 
-    dInputFocused <- renderInputField dSelection
-    (count, eContextMenu) <-
+    (dInputFocused, eContextMenu) <- renderInputField dSelection
+
+    (count, eContextMenu') <-
       case nodeType @b of
         TBlock ->
           renderEntries dInputFocused dSelection []
@@ -294,9 +305,12 @@ contextMenuEntries controls path = do
           ]
         TIdent -> do
           renderEntries dInputFocused dSelection []
-  pure eContextMenu
+
+  pure $ leftmost [eContextMenu, eContextMenu']
   where
-    renderInputField :: Dynamic t ContextMenuSelection -> m (Dynamic t Bool)
+    renderInputField ::
+      Dynamic t ContextMenuSelection ->
+      m (Dynamic t Bool, Event t (ContextMenuEvent a))
     renderInputField dSelected = do
       (inputElement, _) <- Dom.elAttr' "input" ("type" Dom.=: "text") $ pure ()
 
@@ -305,7 +319,18 @@ contextMenuEntries controls path = do
         htmlInputElement =
           JSDOM.uncheckedCastTo JSDOM.HTMLInputElement (Dom._element_raw inputElement)
 
-      ePostBuild <- delay 0.01 =<< getPostBuild
+      eInput :: Event t Text <-
+        fmap (fmapMaybe id) .
+        Dom.wrapDomEvent htmlInputElement (`EventM.on` Events.input) $ do
+          mTarget <- EventM.eventTarget
+          case mTarget of
+            Nothing -> pure Nothing
+            Just target ->
+              lift $ Just <$> HTMLInputElement.getValue (JSDOM.uncheckedCastTo JSDOM.HTMLInputElement target)
+
+      dInputValue <- holdDyn "" eInput
+
+      ePostBuild <- delay 0.05 =<< getPostBuild
       performEvent_ $
         HTMLElement.focus htmlInputElement <$ ePostBuild
 
@@ -327,7 +352,21 @@ contextMenuEntries controls path = do
           (current dFocused)
           (updated dSelected)
 
-      pure dFocused
+      let
+        eChoose =
+          case nodeType @b of
+            TIdent ->
+              attachWithMaybe
+                (\(selected, value) () ->
+                   case selected of
+                     TextInput -> Just . Choose path $ EntryIdent (Text.unpack value)
+                     _ -> Nothing
+                )
+                ((,) <$> current dSelected <*> current dInputValue)
+                (cmcChoose controls)
+            _ -> never
+
+      pure (dFocused, eChoose)
 
     renderEntries ::
       Dynamic t Bool ->
@@ -882,6 +921,7 @@ editor initial initialFocus = do
                        EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
                        EntryPrint -> Print EHole
                        EntryDef -> Def IHole [Ident "x"] (Block [SHole])
+                       EntryIdent i -> Ident i
                    _ -> Nothing
                Select path -> Just . SetFocus $ Focus path
                _ -> Nothing
