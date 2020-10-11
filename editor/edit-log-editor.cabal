@@ -17,11 +17,14 @@ library
 
 executable editor
   main-is:             Main.hs
+  other-modules:       Focus
+                     , Navigation
   build-depends:       base ^>=4.12.0.0
                      , edit-log-editor
                      , edit-log-core
                      , containers
                      , ghcjs-dom
+                     , lens
                      , jsaddle
                      , reflex
                      , reflex-dom

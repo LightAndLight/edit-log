@@ -3,9 +3,11 @@
 {-# language OverloadedStrings #-}
 {-# language RecursiveDo #-}
 {-# language ScopedTypeVariables #-}
+{-# language StandaloneDeriving #-}
 {-# language TypeApplications #-}
 module Main where
 
+import Control.Lens (view, _1, _2, _3)
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
@@ -13,6 +15,7 @@ import Data.Foldable (for_)
 import Data.Functor.Identity (Identity(..))
 import Data.Map (Map)
 import qualified Data.Map as Map
+import qualified Data.Maybe as Maybe
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified GHCJS.DOM.EventM as EventM
@@ -35,6 +38,9 @@ import Session.Pure (runSessionT)
 import qualified Store
 import qualified Versioned
 import Versioned.Pure (Versioned, runVersionedT, newVersioned)
+
+import Focus (Focus(..))
+import Navigation (nextHole)
 
 newtype Attrs = Attrs { unAttrs :: Map Text Text }
 
@@ -62,10 +68,6 @@ instance Semigroup Attrs where
       bs
 
 instance Monoid Attrs where; mempty = Attrs mempty
-
-data Focus a where
-  Focus :: KnownNodeType b => Path a b -> Focus a
-  NoFocus :: Focus a
 
 data DocumentKeys t
   = DocumentKeys
@@ -116,6 +118,7 @@ data NodeEvent a where
   CloseMenu :: NodeEvent a
   ContextMenuEvent :: ContextMenuEvent a -> NodeEvent a
   Select :: KnownNodeType b => Path a b -> NodeEvent a
+deriving instance Show (NodeEvent a)
 
 data Menu
   = MenuClosed
@@ -146,6 +149,7 @@ data ContextMenuEntry :: * -> * where
   EntryIfThen :: ContextMenuEntry Statement
   EntryIfThenElse :: ContextMenuEntry Statement
   EntryPrint :: ContextMenuEntry Statement
+deriving instance Show (ContextMenuEntry a)
 
 entryTitle :: ContextMenuEntry a -> Text
 entryTitle entry =
@@ -171,6 +175,7 @@ data ContextMenuEvent a where
   Choose :: KnownNodeType b => Path a b -> ContextMenuEntry b -> ContextMenuEvent a
   Next :: ContextMenuEvent a
   Prev :: ContextMenuEvent a
+deriving instance Show (ContextMenuEvent a)
 
 contextMenuEntries ::
   forall t m a b.
@@ -613,19 +618,23 @@ editor initial initialFocus = do
     initialSession = newSession
 
   rec
-    (dVersioned, _dSession) <-
-      splitDynPure <$>
+    (dVersioned, _dSession, dFocus) <-
+      (\d -> (view _1 <$> d, view _2 <$> d, view _3 <$> d)) <$>
       foldDyn
-        (\action (versioned, session) ->
+        (\action (versioned, session, focus) ->
             let
               Identity (_, versioned', session') =
                 runSessionT versioned session $
                 case action of
                   Replace path val -> Versioned.replace path val
+              focus' =
+                case action of
+                  Replace path _ ->
+                    Maybe.fromMaybe focus $ nextHole versioned' path
             in
-              (versioned', session')
+              (versioned', session', focus')
         )
-        (initialVersioned, initialSession)
+        (initialVersioned, initialSession, initialFocus)
         (fmapMaybe
           (\case
              ContextMenuEvent event ->
@@ -652,37 +661,6 @@ editor initial initialFocus = do
              _ -> Nothing
           )
           eNode
-        )
-
-    dFocus :: Dynamic t (Focus a) <-
-      holdDyn
-        initialFocus
-        (fmapMaybe
-           (\case
-              Select path -> Just $ Focus path
-              ContextMenuEvent event ->
-                case event of
-                  Choose path entry ->
-                    Just $ case entry of
-                      EntryTrue -> Focus path
-                      EntryFalse -> Focus path
-                      EntryInt -> Focus path
-                      EntryAdd -> Focus $ Path.snoc path BinOp_Left
-                      EntrySubtract -> Focus $ Path.snoc path BinOp_Left
-                      EntryMultiply -> Focus $ Path.snoc path BinOp_Left
-                      EntryDivide -> Focus $ Path.snoc path BinOp_Left
-                      EntryOr -> Focus $ Path.snoc path BinOp_Left
-                      EntryAnd -> Focus $ Path.snoc path BinOp_Left
-                      EntryNot -> Focus $ Path.snoc path UnOp_Value
-                      EntryNeg -> Focus $ Path.snoc path UnOp_Value
-                      EntryFor -> Focus $ Path.snoc path For_Expr
-                      EntryIfThen -> Focus $ Path.snoc path IfThen_Cond
-                      EntryIfThenElse -> Focus $ Path.snoc path IfThenElse_Cond
-                      EntryPrint -> Focus $ Path.snoc path Print_Value
-                  _ -> Nothing
-              _ -> Nothing
-           )
-           eNode
         )
 
     dMenu <-

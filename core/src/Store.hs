@@ -368,3 +368,69 @@ addBlock b =
     Block sts -> do
       stsh <- traverse addStatement sts
       addNode $ NBlock stsh
+
+getH :: MonadStore m => Path a b -> Hash a -> m (Maybe (Hash b))
+getH path h =
+  case path of
+    Nil -> pure $ Just h
+    Cons l rest -> do
+      mNode <- lookupNode h
+      case mNode of
+        Nothing -> pure Nothing
+        Just node ->
+          case l of
+            For_Ident ->
+              case node of
+                NFor ident _ _ ->
+                  error "TODO idents aren't hashed" ident
+                _ -> pure Nothing
+            For_Expr ->
+              case node of
+                NFor _ expr _ -> getH rest expr
+                _ -> pure Nothing
+            For_Block ->
+              case node of
+                NFor _ _ body -> getH rest body
+                _ -> pure Nothing
+            IfThen_Cond ->
+              case node of
+                NIfThen cond _ -> getH rest cond
+                _ -> pure Nothing
+            IfThen_Then ->
+              case node of
+                NIfThen _ then_ -> getH rest then_
+                _ -> pure Nothing
+            IfThenElse_Cond ->
+              case node of
+                NIfThenElse cond _ _ -> getH rest cond
+                _ -> pure Nothing
+            IfThenElse_Then ->
+              case node of
+                NIfThenElse _ then_ _ -> getH rest then_
+                _ -> pure Nothing
+            IfThenElse_Else ->
+              case node of
+                NIfThenElse _ _ else_ -> getH rest else_
+                _ -> pure Nothing
+            Print_Value ->
+              case node of
+                NPrint val -> getH rest val
+                _ -> pure Nothing
+            BinOp_Left ->
+              case node of
+                NBinOp _ left _ -> getH rest left
+                _ -> pure Nothing
+            BinOp_Right ->
+              case node of
+                NBinOp _ _ right -> getH rest right
+                _ -> pure Nothing
+            UnOp_Value ->
+              case node of
+                NUnOp _ val -> getH rest val
+                _ -> pure Nothing
+            Block_Index ix ->
+              case node of
+                NBlock sts ->
+                  case lookup ix $ zip [0..] sts of
+                    Nothing -> pure Nothing
+                    Just st -> getH rest st

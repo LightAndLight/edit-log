@@ -16,6 +16,12 @@ data Path a :: * -> * where
   Cons :: Level a b -> Path b c -> Path a c
 deriving instance Show (Path a b)
 
+append :: Path a b -> Path b c -> Path a c
+append p1 p2 =
+  case p1 of
+    Nil -> p2
+    Cons l p1' -> Cons l (append p1' p2)
+
 snoc :: Path a b -> Level b c -> Path a c
 snoc p l =
   case p of
