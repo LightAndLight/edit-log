@@ -7,7 +7,6 @@
 {-# language TypeApplications #-}
 module Main where
 
-import Control.Lens (view, _1, _2, _3)
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
@@ -582,6 +581,14 @@ renderNode contextMenuControls controls menu versioned focus path h = do
 
 data EditAction a where
   Replace :: KnownNodeType b => Path a b -> b -> EditAction a
+  SetFocus :: Focus a -> EditAction a
+
+data EditorState a
+  = EditorState
+  { esVersioned :: Versioned a
+  , esSession :: Session (Time, Entry a)
+  , esFocus :: Focus a
+  }
 
 editor ::
   forall t m a.
@@ -619,22 +626,31 @@ editor initial initialFocus = do
 
   rec
     (dVersioned, _dSession, dFocus) <-
-      (\d -> (view _1 <$> d, view _2 <$> d, view _3 <$> d)) <$>
+      (\d -> (esVersioned <$> d, esSession <$> d, esFocus <$> d)) <$>
       foldDyn
-        (\action (versioned, session, focus) ->
+        (\action editorState ->
             let
               Identity (_, versioned', session') =
-                runSessionT versioned session $
+                runSessionT (esVersioned editorState) (esSession editorState) $
                 case action of
-                  Replace path val -> Versioned.replace path val
+                  Replace path val -> do
+                    _ <- Versioned.replace path val
+                    pure ()
+                  _ -> pure ()
               focus' =
                 case action of
                   Replace path _ ->
-                    Maybe.fromMaybe focus $ nextHole versioned' path
+                    Maybe.fromMaybe (esFocus editorState) $ nextHole versioned' path
+                  SetFocus newFocus -> newFocus
             in
-              (versioned', session', focus')
+              EditorState { esVersioned = versioned', esSession = session', esFocus = focus' }
         )
-        (initialVersioned, initialSession, initialFocus)
+        (EditorState
+         { esVersioned = initialVersioned
+         , esSession = initialSession
+         , esFocus = initialFocus
+         }
+        )
         (fmapMaybe
           (\case
              ContextMenuEvent event ->

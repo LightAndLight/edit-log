@@ -24,7 +24,6 @@ executable editor
                      , edit-log-core
                      , containers
                      , ghcjs-dom
-                     , lens
                      , jsaddle
                      , reflex
                      , reflex-dom
