@@ -15,6 +15,7 @@ import Data.Functor.Identity (Identity(..))
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Maybe as Maybe
+import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified GHCJS.DOM.EventM as EventM
@@ -39,7 +40,7 @@ import qualified Versioned
 import Versioned.Pure (Versioned, runVersionedT, newVersioned)
 
 import Focus (Focus(..))
-import Navigation (nextHole)
+import Navigation (nextHole, prevHole)
 
 newtype Attrs = Attrs { unAttrs :: Map Text Text }
 
@@ -75,11 +76,18 @@ data DocumentKeys t
   , dkEnter :: Event t ()
   , dkUp :: Event t ()
   , dkDown :: Event t ()
+  , dkTab :: Event t ()
+  , dkShiftTab :: Event t ()
   }
+
+data Keypress
+  = Down Text
+  | Up Text
 
 documentKeys ::
   forall m t.
-  ( Reflex t, TriggerEvent t m, HasDocument m, MonadJSM m
+  ( Reflex t, MonadHold t m, TriggerEvent t m, HasDocument m
+  , MonadJSM m, MonadFix m
   , DomBuilderSpace m ~ GhcjsDomSpace
   ) =>
   m (DocumentKeys t)
@@ -89,13 +97,28 @@ documentKeys = do
   eKeyDown :: Event t Text <-
     Dom.wrapDomEvent document (`EventM.on` Events.keyDown) $ do
       ev <- EventM.event
-      code <- lift $ KeyboardEvent.getCode ev
+      code <- lift $ KeyboardEvent.getKey ev
       when (code `elem` ctrl) EventM.preventDefault
       pure code
+  eKeyUp :: Event t Text <-
+    Dom.wrapDomEvent document (`EventM.on` Events.keyUp) $ do
+      ev <- EventM.event
+      code <- lift $ KeyboardEvent.getKey ev
+      when (code `elem` ctrl) EventM.preventDefault
+      pure code
+  dHeld <-
+    foldDyn
+      (\keypress keys ->
+         case keypress of
+           Down key -> Set.insert key keys
+           Up key -> Set.delete key keys
+      )
+      mempty
+      (leftmost [Up <$> eKeyUp, Down <$> eKeyDown])
   pure $
     DocumentKeys
     { dkSpace =
-        fmapMaybe (\case; "Space" -> Just (); _ -> Nothing) eKeyDown
+        fmapMaybe (\case; " " -> Just (); _ -> Nothing) eKeyDown
     , dkEscape =
         fmapMaybe (\case; "Escape" -> Just (); _ -> Nothing) eKeyDown
     , dkEnter =
@@ -104,6 +127,24 @@ documentKeys = do
         fmapMaybe (\case; "ArrowUp" -> Just (); _ -> Nothing) eKeyDown
     , dkDown =
         fmapMaybe (\case; "ArrowDown" -> Just (); _ -> Nothing) eKeyDown
+    , dkTab =
+        attachWithMaybe
+          (\held pressed ->
+             if pressed == "Tab" && Set.null held
+             then Just ()
+             else Nothing
+          )
+          (current dHeld)
+          eKeyDown
+    , dkShiftTab =
+        attachWithMaybe
+          (\held pressed ->
+             if pressed == "Tab" && Set.member "Shift" held
+             then Just ()
+             else Nothing
+          )
+          (current dHeld)
+          eKeyDown
     }
 
 data NodeControls t
@@ -581,7 +622,8 @@ renderNode contextMenuControls controls menu versioned focus path h = do
 
 data EditAction a where
   Replace :: KnownNodeType b => Path a b -> b -> EditAction a
-  SetFocus :: Focus a -> EditAction a
+  NextHole :: EditAction a
+  PrevHole :: EditAction a
 
 data EditorState a
   = EditorState
@@ -618,6 +660,9 @@ editor initial initialFocus = do
       , ncCloseMenu = dkEscape keys
       }
 
+    eNextHole = NextHole <$ dkTab keys
+    ePrevHole = PrevHole <$ dkShiftTab keys
+
     initialVersioned :: Versioned a
     initialVersioned = newVersioned initial
 
@@ -640,8 +685,22 @@ editor initial initialFocus = do
               focus' =
                 case action of
                   Replace path _ ->
-                    Maybe.fromMaybe (esFocus editorState) $ nextHole versioned' path
-                  SetFocus newFocus -> newFocus
+                    Maybe.fromMaybe (esFocus editorState) $
+                    nextHole versioned' path
+                  NextHole ->
+                    Maybe.fromMaybe (esFocus editorState) $
+                    case esFocus editorState of
+                      Focus path ->
+                        nextHole versioned' path
+                      NoFocus ->
+                        nextHole versioned' Nil
+                  PrevHole ->
+                    Maybe.fromMaybe (esFocus editorState) $
+                    case esFocus editorState of
+                      Focus path ->
+                        prevHole versioned' path
+                      NoFocus ->
+                        prevHole versioned' Nil
             in
               EditorState { esVersioned = versioned', esSession = session', esFocus = focus' }
         )
@@ -651,32 +710,36 @@ editor initial initialFocus = do
          , esFocus = initialFocus
          }
         )
-        (fmapMaybe
-          (\case
-             ContextMenuEvent event ->
-               case event of
-                 Choose path entry ->
-                   Just . Replace path $
-                   case entry of
-                     EntryTrue -> Bool True
-                     EntryFalse -> Bool False
-                     EntryInt -> Int 0
-                     EntryAdd -> BinOp Add EHole EHole
-                     EntrySubtract -> BinOp Add EHole EHole
-                     EntryMultiply -> BinOp Mul EHole EHole
-                     EntryDivide -> BinOp Div EHole EHole
-                     EntryOr -> BinOp Or EHole EHole
-                     EntryAnd -> BinOp And EHole EHole
-                     EntryNot -> UnOp Not EHole
-                     EntryNeg -> UnOp Neg EHole
-                     EntryFor -> For (Ident "x") EHole (Block [SHole])
-                     EntryIfThen -> IfThen EHole (Block [SHole])
-                     EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
-                     EntryPrint -> Print EHole
-                 _ -> Nothing
-             _ -> Nothing
-          )
-          eNode
+        (leftmost
+         [ fmapMaybe
+             (\case
+               ContextMenuEvent event ->
+                 case event of
+                   Choose path entry ->
+                     Just . Replace path $
+                     case entry of
+                       EntryTrue -> Bool True
+                       EntryFalse -> Bool False
+                       EntryInt -> Int 0
+                       EntryAdd -> BinOp Add EHole EHole
+                       EntrySubtract -> BinOp Add EHole EHole
+                       EntryMultiply -> BinOp Mul EHole EHole
+                       EntryDivide -> BinOp Div EHole EHole
+                       EntryOr -> BinOp Or EHole EHole
+                       EntryAnd -> BinOp And EHole EHole
+                       EntryNot -> UnOp Not EHole
+                       EntryNeg -> UnOp Neg EHole
+                       EntryFor -> For (Ident "x") EHole (Block [SHole])
+                       EntryIfThen -> IfThen EHole (Block [SHole])
+                       EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
+                       EntryPrint -> Print EHole
+                   _ -> Nothing
+               _ -> Nothing
+             )
+             eNode
+         , eNextHole
+         , ePrevHole
+         ]
         )
 
     dMenu <-

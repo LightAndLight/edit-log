@@ -4,6 +4,8 @@
 module Navigation
   ( findNextHole
   , nextHole
+  , findPrevHole
+  , prevHole
   )
 where
 
@@ -20,6 +22,10 @@ import qualified Versioned
 import Versioned.Pure (Versioned, runVersionedT)
 
 import Focus (Focus(..))
+
+data SearchEntry a where
+  SearchEntry :: Path a x -> Hash x -> SearchEntry a
+deriving instance Show (SearchEntry a)
 
 findNextHole :: Versioned a -> Path x y -> Hash y -> Maybe (Focus x)
 findNextHole v = go
@@ -56,30 +62,25 @@ findNextHole v = go
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
 
-data SearchEntry a where
-  SearchEntry :: Path a x -> Hash x -> SearchEntry a
-deriving instance Show (SearchEntry a)
-
 nextHole :: forall a b. Versioned a -> Path a b -> Maybe (Focus a)
 nextHole v focusPath = do
-  let
-    Identity ((h, mNode), _) = runVersionedT v $ do
-      rooth <- Versioned.getRoot
-      (,) rooth <$> Store.lookupNode h
-  node <- mNode
-  case node of
-    NSHole -> Nothing
-    NEHole -> Nothing
-    _ -> do
-      let tree = searchTree Nil focusPath h
-      getAlt $ foldMap (\(SearchEntry sPath sH) -> Alt $ findNextHole v sPath sH) tree
+  let Identity (h, _) = runVersionedT v Versioned.getRoot
+  let tree = searchTree Nil focusPath h
+  getAlt $ foldMap (\(SearchEntry sPath sH) -> Alt $ findNextHole v sPath sH) tree
   where
     searchTree :: forall x y. Path a x -> Path x y -> Hash x -> [SearchEntry a]
     searchTree context path h =
+      let Identity (mNode, _) = runVersionedT v $ Store.lookupNode h in
       case path of
-        Nil -> [SearchEntry context h]
+        Nil ->
+          case mNode of
+            Nothing -> []
+            Just node ->
+              case node of
+                NSHole -> []
+                NEHole -> []
+                _ -> [SearchEntry context h]
         Cons l path' -> do
-          let Identity (mNode, _) = runVersionedT v $ Store.lookupNode h
           case mNode of
             Nothing -> []
             Just node ->
@@ -160,4 +161,140 @@ nextHole v focusPath = do
                           (_, st) : rest ->
                             searchTree (Path.snoc context $ Block_Index ix) path' st <>
                             fmap (\(ix', st') -> SearchEntry (Path.snoc context $ Block_Index ix') st') rest
+                          [] -> []
+
+findPrevHole :: Versioned a -> Path x y -> Hash y -> Maybe (Focus x)
+findPrevHole v = go
+  where
+    go :: Path b c -> Hash c -> Maybe (Focus b)
+    go path h = do
+      let Identity (mNode, _) = runVersionedT v $ Store.lookupNode h
+      node <- mNode
+      case node of
+        NFor _ expr body ->
+          go (Path.snoc path For_Block) body <|>
+          go (Path.snoc path For_Expr) expr
+        NIfThen cond then_ ->
+          go (Path.snoc path IfThen_Then) then_ <|>
+          go (Path.snoc path IfThen_Cond) cond
+        NIfThenElse cond then_ else_ ->
+          go (Path.snoc path IfThenElse_Else) else_ <|>
+          go (Path.snoc path IfThenElse_Then) then_ <|>
+          go (Path.snoc path IfThenElse_Cond) cond
+        NPrint val ->
+          go (Path.snoc path Print_Value) val
+        NBool{} -> Nothing
+        NInt{} -> Nothing
+        NBinOp _ left right ->
+          go (Path.snoc path BinOp_Right) right <|>
+          go (Path.snoc path BinOp_Left) left
+        NUnOp _ val ->
+          go (Path.snoc path UnOp_Value) val
+        NBlock sts ->
+          getAlt $
+          foldMap
+            (\(ix, st) -> Alt $ go (Path.snoc path $ Block_Index ix) st)
+            (reverse $ zip [0..] sts)
+        NSHole -> Just $ Focus path
+        NEHole -> Just $ Focus path
+
+prevHole :: forall a b. Versioned a -> Path a b -> Maybe (Focus a)
+prevHole v focusPath = do
+  let Identity (h, _) = runVersionedT v Versioned.getRoot
+  let tree = searchTree Nil focusPath h
+  getAlt $ foldMap (\(SearchEntry sPath sH) -> Alt $ findPrevHole v sPath sH) tree
+  where
+    searchTree :: forall x y. Path a x -> Path x y -> Hash x -> [SearchEntry a]
+    searchTree context path h =
+      let Identity (mNode, _) = runVersionedT v $ Store.lookupNode h in
+      case path of
+        Nil ->
+          case mNode of
+            Nothing -> []
+            Just node ->
+              case node of
+                NSHole -> []
+                NEHole -> []
+                _ -> [SearchEntry context h]
+        Cons l path' -> do
+          case mNode of
+            Nothing -> []
+            Just node ->
+              case l of
+                For_Ident ->
+                  case node of
+                    NFor ident _ _ -> error "TODO idents aren't hashed" ident
+                    _ -> []
+                For_Expr ->
+                  case node of
+                    NFor _ expr _ ->
+                      searchTree (Path.snoc context For_Expr) path' expr
+                    _ -> []
+                For_Block ->
+                  case node of
+                    NFor _ expr body ->
+                      searchTree (Path.snoc context For_Block) path' body <>
+                      [ SearchEntry (Path.snoc context For_Expr) expr ]
+                    _ -> []
+                IfThen_Cond ->
+                  case node of
+                    NIfThen cond _ ->
+                      searchTree (Path.snoc context IfThen_Cond) path' cond
+                    _ -> []
+                IfThen_Then ->
+                  case node of
+                    NIfThen cond then_ ->
+                      searchTree (Path.snoc context IfThen_Then) path' then_ <>
+                      [ SearchEntry (Path.snoc context IfThen_Cond) cond ]
+                    _ -> []
+                IfThenElse_Cond ->
+                  case node of
+                    NIfThenElse cond _ _ ->
+                      searchTree (Path.snoc context IfThenElse_Cond) path' cond
+                    _ -> []
+                IfThenElse_Then ->
+                  case node of
+                    NIfThenElse cond then_ _ ->
+                      searchTree (Path.snoc context IfThenElse_Then) path' then_ <>
+                      [ SearchEntry (Path.snoc context IfThenElse_Cond) cond ]
+                    _ -> []
+                IfThenElse_Else ->
+                  case node of
+                    NIfThenElse cond then_ else_->
+                      searchTree (Path.snoc context IfThenElse_Else) path' else_ <>
+                      [ SearchEntry (Path.snoc context IfThenElse_Then) then_
+                      , SearchEntry (Path.snoc context IfThenElse_Cond) cond
+                      ]
+                    _ -> []
+                Print_Value ->
+                  case node of
+                    NPrint val ->
+                      searchTree (Path.snoc context Print_Value) path' val
+                    _ -> []
+                BinOp_Left ->
+                  case node of
+                    NBinOp _ left _ ->
+                      searchTree (Path.snoc context BinOp_Left) path' left
+                    _ -> []
+                BinOp_Right ->
+                  case node of
+                    NBinOp _ left right->
+                      searchTree (Path.snoc context BinOp_Right) path' right <>
+                      [ SearchEntry (Path.snoc context BinOp_Left) left ]
+                    _ -> []
+                UnOp_Value ->
+                  case node of
+                    NUnOp _ val ->
+                      searchTree (Path.snoc context UnOp_Value) path' val
+                    _ -> []
+                Block_Index ix ->
+                  case node of
+                    NBlock sts ->
+                      let
+                        (prefix, suffix) = splitAt ix $ zip [0..] sts
+                      in
+                        case suffix of
+                          (_, st) : _ ->
+                            searchTree (Path.snoc context $ Block_Index ix) path' st <>
+                            fmap (\(ix', st') -> SearchEntry (Path.snoc context $ Block_Index ix') st') prefix
                           [] -> []
