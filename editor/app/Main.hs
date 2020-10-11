@@ -235,12 +235,13 @@ contextMenuEntries controls path = do
       current dHighlighted <@>
       mergeWith (.) [(\now -> now + 1) <$ cmcNext controls,  (\now -> now - 1) <$ cmcPrev controls]
 
+    dInputFocused <- renderInputField
     (count, eContextMenu) <-
       case nodeType @b of
         TBlock ->
-          renderEntries dHighlighted []
+          renderEntries dInputFocused dHighlighted []
         TExpr ->
-          renderEntries dHighlighted
+          renderEntries dInputFocused dHighlighted
           [ EntryTrue
           , EntryFalse
           , EntryInt
@@ -254,19 +255,32 @@ contextMenuEntries controls path = do
           , EntryNeg
           ]
         TStatement ->
-          renderEntries dHighlighted
+          renderEntries dInputFocused dHighlighted
           [ EntryFor
           , EntryIfThen
           , EntryIfThenElse
           , EntryPrint
           , EntryDef
           ]
-        TIdent ->
-          renderEntries dHighlighted []
+        TIdent -> do
+          renderEntries dInputFocused dHighlighted []
   pure eContextMenu
   where
-    renderEntries :: Dynamic t Int -> [ContextMenuEntry b] -> m (Int, Event t (ContextMenuEvent a))
-    renderEntries dHighlighted entries = do
+    renderInputField :: m (Dynamic t Bool)
+    renderInputField = do
+      (inputElement, _) <- Dom.elAttr' "input" ("type" Dom.=: "text" <> "autofocus" Dom.=: "") $ pure ()
+      let
+        eFocus = Dom.domEvent Dom.Focus inputElement
+        eBlur = Dom.domEvent Dom.Blur inputElement
+      dFocused :: Dynamic t Bool <- holdDyn True $ leftmost [False <$ eBlur, True <$ eFocus]
+      pure dFocused
+
+    renderEntries ::
+      Dynamic t Bool ->
+      Dynamic t Int ->
+      [ContextMenuEntry b] ->
+      m (Int, Event t (ContextMenuEvent a))
+    renderEntries dInputFocused dHighlighted entries = do
       for_ (zip [0..] entries) $ \(ix, entry) ->
         let
           dAttrs =
@@ -282,7 +296,9 @@ contextMenuEntries controls path = do
           Dom.text $ entryTitle entry
       pure
         ( length entries
-        , Choose path . (entries !!) <$> current dHighlighted <@ cmcChoose controls
+        , Choose path . (entries !!) <$>
+          current dHighlighted <@
+          gate (not <$> current dInputFocused) (cmcChoose controls)
         )
 
 renderIdent ::
