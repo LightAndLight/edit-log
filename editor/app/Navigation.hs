@@ -85,6 +85,7 @@ nextHole v focusPath = do
               case node of
                 NSHole -> []
                 NEHole -> []
+                NIHole -> []
                 _ -> [SearchEntry context h]
         Cons l path' -> do
           case mNode of

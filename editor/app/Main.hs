@@ -1,4 +1,5 @@
 {-# language GADTs, KindSignatures #-}
+{-# language FlexibleContexts #-}
 {-# language LambdaCase #-}
 {-# language OverloadedStrings #-}
 {-# language RecursiveDo #-}
@@ -21,6 +22,9 @@ import qualified Data.Text as Text
 import qualified GHCJS.DOM.EventM as EventM
 import qualified GHCJS.DOM.GlobalEventHandlers as Events
 import qualified GHCJS.DOM.KeyboardEvent as KeyboardEvent
+import JSDOM.Types (HTMLInputElement)
+import qualified JSDOM.HTMLElement as HTMLElement
+import qualified JSDOM.Types as JSDOM
 import Language.Javascript.JSaddle.Monad (MonadJSM)
 import Reflex
 import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace, HasDocument, mainWidgetWithHead)
@@ -219,9 +223,35 @@ data ContextMenuEvent a where
   Prev :: ContextMenuEvent a
 deriving instance Show (ContextMenuEvent a)
 
+data ContextMenuSelection
+  = TextInput
+  | MenuEntry Int
+  deriving Eq
+
+menuNext :: Int -> ContextMenuSelection -> ContextMenuSelection
+menuNext itemCount s =
+  case s of
+    TextInput -> MenuEntry 0
+    MenuEntry n
+      | n < itemCount -> MenuEntry $ n+1
+      | otherwise -> TextInput
+
+menuPrev :: Int -> ContextMenuSelection -> ContextMenuSelection
+menuPrev itemCount s =
+  case s of
+    TextInput -> MenuEntry $ itemCount-1
+    MenuEntry n ->
+      if n == 0
+      then TextInput
+      else MenuEntry $ n-1
+
 contextMenuEntries ::
   forall t m a b.
-  ( MonadHold t m, DomBuilder t m, PostBuild t m, MonadFix m
+  ( MonadHold t m, DomBuilder t m, PostBuild t m
+  , PerformEvent t m, MonadJSM (Performable m)
+  , TriggerEvent t m
+  , MonadFix m, MonadJSM m
+  , DomBuilderSpace m ~ GhcjsDomSpace
   , KnownNodeType b
   ) =>
   ContextMenuControls t ->
@@ -229,19 +259,19 @@ contextMenuEntries ::
   m (Event t (ContextMenuEvent a))
 contextMenuEntries controls path = do
   rec
-    dHighlighted :: Dynamic t Int <-
-      holdDyn 0 $
-      (\now f -> f now `mod` count) <$>
-      current dHighlighted <@>
-      mergeWith (.) [(\now -> now + 1) <$ cmcNext controls,  (\now -> now - 1) <$ cmcPrev controls]
+    dSelection :: Dynamic t ContextMenuSelection <-
+      foldDyn
+        ($)
+        TextInput
+        (mergeWith (.) [menuNext count <$ cmcNext controls, menuPrev count <$ cmcPrev controls])
 
-    dInputFocused <- renderInputField
+    dInputFocused <- renderInputField dSelection
     (count, eContextMenu) <-
       case nodeType @b of
         TBlock ->
-          renderEntries dInputFocused dHighlighted []
+          renderEntries dInputFocused dSelection []
         TExpr ->
-          renderEntries dInputFocused dHighlighted
+          renderEntries dInputFocused dSelection
           [ EntryTrue
           , EntryFalse
           , EntryInt
@@ -255,7 +285,7 @@ contextMenuEntries controls path = do
           , EntryNeg
           ]
         TStatement ->
-          renderEntries dInputFocused dHighlighted
+          renderEntries dInputFocused dSelection
           [ EntryFor
           , EntryIfThen
           , EntryIfThenElse
@@ -263,42 +293,71 @@ contextMenuEntries controls path = do
           , EntryDef
           ]
         TIdent -> do
-          renderEntries dInputFocused dHighlighted []
+          renderEntries dInputFocused dSelection []
   pure eContextMenu
   where
-    renderInputField :: m (Dynamic t Bool)
-    renderInputField = do
-      (inputElement, _) <- Dom.elAttr' "input" ("type" Dom.=: "text" <> "autofocus" Dom.=: "") $ pure ()
+    renderInputField :: Dynamic t ContextMenuSelection -> m (Dynamic t Bool)
+    renderInputField dSelected = do
+      (inputElement, _) <- Dom.elAttr' "input" ("type" Dom.=: "text") $ pure ()
+
+      let
+        htmlInputElement :: HTMLInputElement
+        htmlInputElement =
+          JSDOM.uncheckedCastTo JSDOM.HTMLInputElement (Dom._element_raw inputElement)
+
+      ePostBuild <- delay 0.01 =<< getPostBuild
+      performEvent_ $
+        HTMLElement.focus htmlInputElement <$ ePostBuild
+
       let
         eFocus = Dom.domEvent Dom.Focus inputElement
         eBlur = Dom.domEvent Dom.Blur inputElement
+
       dFocused :: Dynamic t Bool <- holdDyn True $ leftmost [False <$ eBlur, True <$ eFocus]
+
+      performEvent_ $
+        attachWithMaybe
+          (\focused selected ->
+            case selected of
+              TextInput -> Just $ HTMLElement.focus htmlInputElement
+              _
+                | focused -> Just $ HTMLElement.blur htmlInputElement
+                | otherwise -> Nothing
+          )
+          (current dFocused)
+          (updated dSelected)
+
       pure dFocused
 
     renderEntries ::
       Dynamic t Bool ->
-      Dynamic t Int ->
+      Dynamic t ContextMenuSelection ->
       [ContextMenuEntry b] ->
       m (Int, Event t (ContextMenuEvent a))
-    renderEntries dInputFocused dHighlighted entries = do
+    renderEntries dInputFocused dSelection entries = do
       for_ (zip [0..] entries) $ \(ix, entry) ->
         let
           dAttrs =
-            (\active ->
+            (\selection ->
               "class" Dom.=:
                 ("context-menu-entry" <>
-                 if ix == active then " context-menu-entry-highlighted" else ""
+                 if MenuEntry ix == selection then " context-menu-entry-highlighted" else ""
                 )
             ) <$>
-            dHighlighted
+            dSelection
         in
           Dom.elDynAttr "div" dAttrs $
           Dom.text $ entryTitle entry
       pure
         ( length entries
-        , Choose path . (entries !!) <$>
-          current dHighlighted <@
-          gate (not <$> current dInputFocused) (cmcChoose controls)
+        , attachWithMaybe
+            (\selection () ->
+               case selection of
+                 MenuEntry ix -> Just . Choose path $ entries !! ix
+                 _ -> Nothing
+            )
+            (current dSelection)
+            (gate (not <$> current dInputFocused) (cmcChoose controls))
         )
 
 renderIdent ::
@@ -348,7 +407,11 @@ instance Reflex t => Monoid (NodeInfo t) where
 
 renderNode ::
   forall t m a b.
-  ( MonadHold t m, DomBuilder t m, PostBuild t m, MonadFix m
+  ( MonadHold t m, DomBuilder t m, PostBuild t m
+  , PerformEvent t m, MonadJSM (Performable m)
+  , DomBuilderSpace m ~ GhcjsDomSpace
+  , TriggerEvent t m
+  , MonadFix m, MonadJSM m
   , KnownNodeType b
   ) =>
   ContextMenuControls t ->
@@ -718,6 +781,7 @@ data EditorState a
 editor ::
   forall t m a.
   ( Reflex t, MonadHold t m, PostBuild t m, TriggerEvent t m
+  , PerformEvent t m, MonadJSM (Performable m)
   , DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
   , HasDocument m
   , MonadFix m, MonadJSM m
