@@ -399,6 +399,11 @@ contextMenuEntries controls path = do
             (gate (not <$> current dInputFocused) (cmcChoose controls))
         )
 
+syntaxHole :: DomBuilder t m => Attrs -> m ()
+syntaxHole attrs =
+  Dom.elAttr "div" (unAttrs attrs) $
+  Dom.text "?"
+
 renderIdent ::
   DomBuilder t m =>
   Ident ->
@@ -407,7 +412,7 @@ renderIdent i =
   syntaxNode mempty $
   case i of
     Ident n -> Dom.text $ Text.pack n
-    IHole -> Dom.text "_"
+    IHole -> syntaxHole mempty
 
 syntaxInline :: DomBuilder t m => Attrs -> m a -> m a
 syntaxInline attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-inline" <> attrs
@@ -444,6 +449,25 @@ instance Reflex t => Semigroup (NodeInfo t) where
 instance Reflex t => Monoid (NodeInfo t) where
   mempty = NodeInfo { niHovered = pure False }
 
+isHole :: Node a -> Bool
+isHole n =
+  case n of
+  NFor{} -> False
+  NIfThen{} -> False
+  NIfThenElse{} -> False
+  NPrint{} -> False
+  NDef{} -> False
+  NBool{} -> False
+  NInt{} -> False
+  NBinOp{} -> False
+  NUnOp{} -> False
+  NBlock{} -> False
+  NIdent{} -> False
+
+  NSHole{} -> True
+  NEHole{} -> True
+  NIHole{} -> True
+
 renderNode ::
   forall t m a b.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
@@ -468,30 +492,46 @@ renderNode contextMenuControls controls menu versioned focus path h = do
       eMouseleave = Dom.domEvent Dom.Mouseleave nodeElement
       eMousedown = Dom.domEvent Dom.Mousedown nodeElement
 
-    dMouseInside <- holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
+    let
+      inFocus =
+        case focus of
+          Focus Nil -> True
+          _ -> False
+
+    dMouseInside <-
+      case nodeType @b of
+        TBlock -> pure $ niHovered childrenInfo
+        _ -> holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
     dHovered <-
       holdUniqDyn $
-      (\inside children -> inside && not children) <$>
-      dMouseInside <*>
-      niHovered childrenInfo
+      case nodeType @b of
+        TBlock -> pure False
+        _ ->
+          (\inside children -> inside && not children && not inFocus) <$>
+          dMouseInside <*>
+          niHovered childrenInfo
 
     let
       eClicked = gate (current dHovered) eMousedown
 
     let
+      Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
       dAttrs =
-        (pure $ case nodeType @b of
-           TExpr -> "class" =: "syntax-expr"
-           TBlock -> "class" =: "syntax-block"
-           TStatement -> "class" =: "syntax-statement"
-           TIdent -> "class" =: "syntax-ident"
+        (pure $
+         if Maybe.maybe False isHole mNode
+         then "class" =: "syntax-hole"
+         else
+           case nodeType @b of
+             TExpr -> "class" =: "syntax-expr"
+             TBlock -> "class" =: "syntax-block"
+             TStatement -> "class" =: "syntax-statement"
+             TIdent -> "class" =: "syntax-ident"
         ) <>
         fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
         if inFocus then pure ("class" =: "syntax-focused") else mempty
 
     (nodeElement, (eChildren, childrenInfo)) <-
-      syntaxNodeD' dAttrs $ do
-        let Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
+      syntaxNodeD' dAttrs $
         case mNode of
           Nothing ->
             (never, mempty) <$ Dom.text "error: missing node"
@@ -500,7 +540,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
               NIdent n ->
                 (never, mempty) <$ Dom.text (Text.pack n)
               NIHole ->
-                (never, mempty) <$ Dom.text "_"
+                (never, mempty) <$ syntaxHole mempty
 
               NFor ident val body -> do
                 ((eForIdent, forIdentInfo), (eForExpr, forExprInfo)) <-
@@ -758,9 +798,9 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                     (zip [0::Int ..] sts)
                 pure (leftmost $ fst <$> nodes, foldMap snd nodes)
               NSHole ->
-                (never, mempty) <$ Dom.text "_"
+                (never, mempty) <$ syntaxHole mempty
               NEHole ->
-                (never, mempty) <$ Dom.text "_"
+                (never, mempty) <$ syntaxHole mempty
 
   eContextMenu :: Event t (ContextMenuEvent a) <-
     case menu of
@@ -798,11 +838,6 @@ renderNode contextMenuControls controls menu versioned focus path h = do
       ]
     , nodeInfo
     )
-  where
-    inFocus =
-      case focus of
-        Focus Nil -> True
-        _ -> False
 
 data EditAction a where
   Replace :: KnownNodeType b => Path a b -> b -> EditAction a
@@ -971,19 +1006,93 @@ main = do
        Dom.el "title" $ Dom.text "Editor"
        Dom.elAttr "link"
          ("rel" Dom.=: "stylesheet" <>
-          "href" Dom.=: "https://fonts.googleapis.com/css2?family=Source+Code+Pro&display=swap"
+          "href" Dom.=: "https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,500;1,400&display=swap"
          )
          (pure ())
+       let
+         bgColor = "#f3f3f3"
+         keyword = "#354b98"
+
+
+         holeInactiveText = "rgba(0, 0, 0, 0.3)"
+         holeInactive = "rgba(0, 0, 0, 0.2)"
+
+         holeHoveredText = "rgba(0, 0, 0, 0.5)"
+         holeHovered = "rgba(0, 0, 0, 0.4)"
+
+         holeActiveText = "rgba(0, 0, 0, 0.6)"
+         holeActive = "#fb3abe"
+
+         nodeHoveredBg = "rgba(0, 0, 0, 0.025)"
+         nodeHovered = "rgba(0, 0, 0, 0.4)"
+
+         nodeActiveBg = "rgba(0, 0, 0, 0.05)"
+         nodeActive = "#fb3abe"
+
        Dom.el "style" . Dom.text $
          Text.unlines
-         [ "html { font-family: 'Source Code Pro', monospace; }"
+         [ "html {"
+         , "  font-family: 'Source Code Pro', monospace;"
+         , "  background-color: " <> bgColor <> ";"
+         , "}"
          , ""
          , ".syntax-node {"
          , "  display: inline-block;"
          , "}"
          , ""
+         , ".syntax-hole {"
+         , "  box-shadow: inset 0 -1px 0 " <> holeInactive <> ";"
+         , "  font-style: italic;"
+         , "  color: " <> holeInactiveText <> ";"
+         , "}"
+         , ""
+         , ".syntax-statement {"
+         , "  padding-left: 0.25em;"
+         , "  border-radius: 0.1em;"
+         , "}"
+         , ""
+         , ".syntax-focused.syntax-statement {"
+         , "  box-shadow: inset 2px 0px 0 " <> nodeActive <> ";"
+         , "  background-color: " <> nodeActiveBg <> ";"
+         , "}"
+         , ""
+         , ".syntax-hovered.syntax-statement {"
+         , "  box-shadow: inset 2px 0px 0 " <> nodeHovered <> ";"
+         , "  background-color: " <> nodeHoveredBg <> ";"
+         , "}"
+         , ""
+         , ".syntax-focused.syntax-expr {"
+         , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
+         , "  color: " <> holeActiveText <> ";"
+         , "}"
+         , ""
+         , ".syntax-hovered.syntax-expr {"
+         , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
+         , "  color: " <> holeHoveredText <> ";"
+         , "}"
+         , ""
+         , ".syntax-focused.syntax-hole {"
+         , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
+         , "  color: " <> holeActiveText <> ";"
+         , "}"
+         , ""
+         , ".syntax-hovered.syntax-hole {"
+         , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
+         , "  color: " <> holeHoveredText <> ";"
+         , "}"
+         , ""
+         , ".syntax-focused {"
+         , "}"
+         , ""
+         , ".syntax-keyword {"
+         , "  color: " <> keyword <> ";"
+         , "  font-weight: 500;"
+         , "}"
+         , ""
+         , ".syntax-symbol {"
+         , "}"
+         , ""
          , ".syntax-hovered {"
-         , "  border: 1px solid lightgrey;"
          , "}"
          , ""
          , ".syntax-inline {"
@@ -998,6 +1107,11 @@ main = do
          , "  align-items: center;"
          , "  margin-top: 0.2em;"
          , "  margin-bottom: 0.2em;"
+         , "}"
+         , ""
+         , ".syntax-block {"
+         , "  width: 100%;"
+         , "  box-sizing: border-box;"
          , "}"
          , ""
          , ".syntax-node + .syntax-symbol {"
@@ -1022,10 +1136,6 @@ main = do
          , ""
          , ".syntax-nested {"
          , "  margin-left: 1em;"
-         , "}"
-         , ""
-         , ".syntax-focused {"
-         , "  border: 1px solid black;"
          , "}"
          , ""
          , "#context-menu {"
