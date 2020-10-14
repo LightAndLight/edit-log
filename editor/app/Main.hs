@@ -39,8 +39,9 @@ import Hash (Hash)
 import Log (Entry, Time)
 import Node (Node(..))
 import NodeType (KnownNodeType, NodeType(..), nodeType)
+import qualified Parser
 import Path (Path(..), Level(..))
-import qualified Path as Path
+import qualified Path
 import Syntax (Block(..), Statement(..), Expr(..), BinOp(..), UnOp(..), Ident(..))
 import Session (Session, newSession)
 import Session.Pure (runSessionT)
@@ -167,7 +168,6 @@ data NodeEvent a where
   CloseMenu :: NodeEvent a
   ContextMenuEvent :: ContextMenuEvent a -> NodeEvent a
   Select :: KnownNodeType b => Path a b -> NodeEvent a
-deriving instance Show (NodeEvent a)
 
 data Menu
   = MenuClosed
@@ -182,6 +182,7 @@ data ContextMenuControls t
   }
 
 data ContextMenuEntry :: * -> * where
+  EntrySuggestion :: Either Parser.ParseError a -> ContextMenuEntry a
   EntryTrue :: ContextMenuEntry Expr
   EntryFalse :: ContextMenuEntry Expr
   EntryInt :: ContextMenuEntry Expr
@@ -201,11 +202,17 @@ data ContextMenuEntry :: * -> * where
   EntryDef :: ContextMenuEntry Statement
 
   EntryIdent :: String -> ContextMenuEntry Ident
-deriving instance Show (ContextMenuEntry a)
 
-entryTitle :: ContextMenuEntry a -> Text
+entryTitle :: forall a. KnownNodeType a => ContextMenuEntry a -> Text
 entryTitle entry =
   case entry of
+    EntrySuggestion res ->
+      Text.pack $ case nodeType @a of
+        TBlock -> show res
+        TExpr -> show res
+        TStatement -> show res
+        TIdent -> show res
+
     EntryTrue -> "true"
     EntryFalse -> "false"
     EntryInt -> "int"
@@ -230,7 +237,6 @@ data ContextMenuEvent a where
   Choose :: KnownNodeType b => Path a b -> ContextMenuEntry b -> ContextMenuEvent a
   Next :: ContextMenuEvent a
   Prev :: ContextMenuEvent a
-deriving instance Show (ContextMenuEvent a)
 
 data ContextMenuSelection
   = TextInput
@@ -274,49 +280,70 @@ contextMenuEntries controls path = do
         TextInput
         (mergeWith
            (.)
-           [ menuNext count <$ cmcNext controls
-           , menuPrev count <$ cmcPrev controls
+           [ menuNext <$> current dCount <@ cmcNext controls
+           , menuPrev <$> current dCount <@ cmcPrev controls
            , const TextInput <$ ffilter id (updated dInputFocused)
            ])
 
-    (dInputFocused, eContextMenu) <- renderInputField dSelection
+    (dInputFocused, dInputValue, eContextMenu) <- renderInputField dSelection
 
-    (count, eContextMenu') <-
-      case nodeType @b of
-        TBlock ->
-          renderEntries dInputFocused dSelection []
-        TExpr ->
-          renderEntries dInputFocused dSelection
-          [ EntryTrue
-          , EntryFalse
-          , EntryInt
-          , EntryAdd
-          , EntrySubtract
-          , EntryMultiply
-          , EntryDivide
-          , EntryOr
-          , EntryAnd
-          , EntryNot
-          , EntryNeg
-          ]
-        TStatement ->
-          renderEntries dInputFocused dSelection
-          [ EntryFor
-          , EntryIfThen
-          , EntryIfThenElse
-          , EntryPrint
-          , EntryDef
-          ]
-        TIdent -> do
-          renderEntries dInputFocused dSelection []
+    let
+      dParseResult :: Dynamic t (Either Parser.ParseError b)
+      dParseResult =
+        (\inputValue ->
+          case nodeType @b of
+            TBlock -> Left Parser.ParseError
+            TExpr -> Parser.runParser Parser.expr $ Text.unpack inputValue
+            TStatement -> Left Parser.ParseError
+            TIdent -> Left Parser.ParseError
+        ) <$>
+        dInputValue
+
+      dEntryList :: Dynamic t [ContextMenuEntry b]
+      dEntryList =
+        (\parseResult ->
+          case nodeType @b of
+            TBlock ->
+              [EntrySuggestion parseResult]
+            TExpr ->
+              [ EntrySuggestion parseResult
+              , EntryTrue
+              , EntryFalse
+              , EntryInt
+              , EntryAdd
+              , EntrySubtract
+              , EntryMultiply
+              , EntryDivide
+              , EntryOr
+              , EntryAnd
+              , EntryNot
+              , EntryNeg
+              ]
+            TStatement ->
+              [ EntrySuggestion parseResult
+              , EntryFor
+              , EntryIfThen
+              , EntryIfThenElse
+              , EntryPrint
+              , EntryDef
+              ]
+            TIdent ->
+              [EntrySuggestion parseResult]
+        ) <$>
+        dParseResult
+
+    (dCount, eContextMenu') <- renderEntries dInputFocused dSelection dEntryList
 
   pure $ leftmost [eContextMenu, eContextMenu']
   where
     renderInputField ::
       Dynamic t ContextMenuSelection ->
-      m (Dynamic t Bool, Event t (ContextMenuEvent a))
+      m (Dynamic t Bool, Dynamic t Text, Event t (ContextMenuEvent a))
     renderInputField dSelected = do
-      (inputElement, _) <- Dom.elAttr' "input" ("type" Dom.=: "text" <> "id" Dom.=: "context-menu-input") $ pure ()
+      (inputElement, _) <-
+        Dom.elAttr' "input"
+          ("type" Dom.=: "text" <> "id" Dom.=: "context-menu-input" <> "autocomplete" Dom.=: "off")
+          (pure ())
 
       let
         htmlInputElement :: HTMLInputElement
@@ -332,7 +359,7 @@ contextMenuEntries controls path = do
             Just target ->
               lift $ Just <$> HTMLInputElement.getValue (JSDOM.uncheckedCastTo JSDOM.HTMLInputElement target)
 
-      dInputValue <- holdDyn "" eInput
+      dValue <- holdDyn "" eInput
 
       ePostBuild <- delay 0.05 =<< getPostBuild
       performEvent_ $
@@ -366,41 +393,48 @@ contextMenuEntries controls path = do
                      TextInput -> Just . Choose path $ EntryIdent (Text.unpack value)
                      _ -> Nothing
                 )
-                ((,) <$> current dSelected <*> current dInputValue)
+                ((,) <$> current dSelected <*> current dValue)
                 (cmcChoose controls)
             _ -> never
 
-      pure (dFocused, eChoose)
+      pure (dFocused, dValue, eChoose)
+
+    renderEntry ::
+      Dynamic t ContextMenuSelection ->
+      Int ->
+      ContextMenuEntry b ->
+      m ()
+    renderEntry dSelection ix entry =
+      let
+        dAttrs =
+          (\selection ->
+            "class" Dom.=:
+              ("context-menu-entry" <>
+              if MenuEntry ix == selection then " context-menu-entry-highlighted" else ""
+              )
+          ) <$>
+          dSelection
+      in
+        Dom.elDynAttr "div" dAttrs $
+        Dom.text $ entryTitle entry
 
     renderEntries ::
       Dynamic t Bool ->
       Dynamic t ContextMenuSelection ->
-      [ContextMenuEntry b] ->
-      m (Int, Event t (ContextMenuEvent a))
-    renderEntries dInputFocused dSelection entries =
+      Dynamic t [ContextMenuEntry b] ->
+      m (Dynamic t Int, Event t (ContextMenuEvent a))
+    renderEntries dInputFocused dSelection dEntries =
       Dom.elAttr "div" ("id" Dom.=: "context-menu-entries") $ do
-        for_ (zip [0..] entries) $ \(ix, entry) ->
-          let
-            dAttrs =
-              (\selection ->
-                "class" Dom.=:
-                  ("context-menu-entry" <>
-                  if MenuEntry ix == selection then " context-menu-entry-highlighted" else ""
-                  )
-              ) <$>
-              dSelection
-          in
-            Dom.elDynAttr "div" dAttrs $
-            Dom.text $ entryTitle entry
+        Dom.dyn_ $ (\entries -> for_ (zip [0..] entries) (uncurry $ renderEntry dSelection)) <$> dEntries
         pure
-          ( length entries
+          ( length <$> dEntries
           , attachWithMaybe
-              (\selection () ->
+              (\(selection, entries) () ->
                 case selection of
                   MenuEntry ix -> Just . Choose path $ entries !! ix
                   _ -> Nothing
               )
-              (current dSelection)
+              ((,) <$> current dSelection <*> current dEntries)
               (gate (not <$> current dInputFocused) (cmcChoose controls))
           )
 
@@ -831,8 +865,16 @@ renderContextMenu ::
   Dynamic t (Focus a) ->
   Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)) ->
   m (Event t (ContextMenuEvent a))
-renderContextMenu contextMenuControls dMenu dFocus dFocusElement =
+renderContextMenu contextMenuControls dMenu dFocus dFocusElement = do
+  dMkMenu <- do
+    let dMkMenu_ = mkMenu <$> dMenu <*> dFocus <*> dFocusElement
+    Dom.widgetHold (join . sample $ current dMkMenu_) (updated dMkMenu_)
+
   let
+    eContextMenu = switchDyn dMkMenu
+
+  pure eContextMenu
+  where
     mkMenu ::
       Menu ->
       Focus a ->
@@ -859,13 +901,15 @@ renderContextMenu contextMenuControls dMenu dFocus dFocusElement =
                 contextMenuAttrs = "id" Dom.=: "context-menu" <> "style" Dom.=: pos menuX menuY
               Dom.elAttr "div" contextMenuAttrs $ do
                 contextMenuEntries contextMenuControls path
-          switchDyn <$> Dom.widgetHold (pure never) eRenderMenu
+
+          dRenderMenu <- Dom.widgetHold (pure never) eRenderMenu
+
+          let
+            eContextMenu = switchDyn dRenderMenu
+
+          pure eContextMenu
         _ ->
           pure never
-
-    dMkMenu = mkMenu <$> dMenu <*> dFocus <*> dFocusElement
-  in
-    switchDyn <$> Dom.widgetHold (join . sample $ current dMkMenu) (updated dMkMenu)
 
 renderNodeHash ::
   forall t m a b.
@@ -1047,25 +1091,28 @@ editor initial initialFocus = do
                ContextMenuEvent event ->
                  case event of
                    Choose path entry ->
-                     Just . Replace path $
                      case entry of
-                       EntryTrue -> Bool True
-                       EntryFalse -> Bool False
-                       EntryInt -> Int 0
-                       EntryAdd -> BinOp Add EHole EHole
-                       EntrySubtract -> BinOp Sub EHole EHole
-                       EntryMultiply -> BinOp Mul EHole EHole
-                       EntryDivide -> BinOp Div EHole EHole
-                       EntryOr -> BinOp Or EHole EHole
-                       EntryAnd -> BinOp And EHole EHole
-                       EntryNot -> UnOp Not EHole
-                       EntryNeg -> UnOp Neg EHole
-                       EntryFor -> For IHole EHole (Block [SHole])
-                       EntryIfThen -> IfThen EHole (Block [SHole])
-                       EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
-                       EntryPrint -> Print EHole
-                       EntryDef -> Def IHole [Ident "x"] (Block [SHole])
-                       EntryIdent i -> Ident i
+                       EntrySuggestion res ->
+                         case res of
+                           Left{} -> Nothing
+                           Right a -> Just $ Replace path a
+                       EntryTrue -> Just . Replace path $ Bool True
+                       EntryFalse -> Just . Replace path $ Bool False
+                       EntryInt -> Just . Replace path $ Int 0
+                       EntryAdd -> Just . Replace path $ BinOp Add EHole EHole
+                       EntrySubtract -> Just . Replace path $ BinOp Sub EHole EHole
+                       EntryMultiply -> Just . Replace path $ BinOp Mul EHole EHole
+                       EntryDivide -> Just . Replace path $ BinOp Div EHole EHole
+                       EntryOr -> Just . Replace path $ BinOp Or EHole EHole
+                       EntryAnd -> Just . Replace path $ BinOp And EHole EHole
+                       EntryNot -> Just . Replace path $ UnOp Not EHole
+                       EntryNeg -> Just . Replace path $ UnOp Neg EHole
+                       EntryFor -> Just . Replace path $ For IHole EHole (Block [SHole])
+                       EntryIfThen -> Just . Replace path $ IfThen EHole (Block [SHole])
+                       EntryIfThenElse -> Just . Replace path $ IfThenElse EHole (Block [SHole]) (Block [SHole])
+                       EntryPrint -> Just . Replace path $ Print EHole
+                       EntryDef -> Just . Replace path $ Def IHole [Ident "x"] (Block [SHole])
+                       EntryIdent i -> Just . Replace path $ Ident i
                    _ -> Nothing
                Select path -> Just . SetFocus $ Focus path
                _ -> Nothing

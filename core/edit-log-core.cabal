@@ -22,6 +22,7 @@ library
                      , Log.Pure
                      , Node
                      , NodeType
+                     , Parser
                      , Path
                      , Session
                      , Session.Pure
@@ -38,6 +39,7 @@ library
                      , hashable
                      , lens
                      , mtl
+                     , parsers
                      , transformers >= 0.5
                      , unordered-containers
   hs-source-dirs:      src
