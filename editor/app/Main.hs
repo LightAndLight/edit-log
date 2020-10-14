@@ -791,6 +791,52 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
             NEHole ->
               (never, mempty) <$ syntaxHole mempty
 
+renderContextMenu ::
+  forall t m a b.
+  ( Reflex t, MonadHold t m
+  , DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
+  , PostBuild t m, TriggerEvent t m, PerformEvent t m, MonadJSM (Performable m)
+  , MonadJSM m, MonadFix m
+  ) =>
+  ContextMenuControls t ->
+  Dynamic t Menu ->
+  Focus b ->
+  Path a b ->
+  Dom.Element Dom.EventResult GhcjsDomSpace t ->
+  m (Event t (ContextMenuEvent a))
+renderContextMenu contextMenuControls dMenu focus path nodeElement =
+  let
+    mkMenu :: Menu -> m (Event t (ContextMenuEvent a))
+    mkMenu menu =
+      case menu of
+        MenuOpen | Focus (Nil :: Path b c) <- focus -> do
+          -- we delay the rendering of the menu because it needs some JS properties that aren't
+          -- present if we render immediately
+          ePostBuild <- delay 0.05 =<< getPostBuild
+          let
+            eRenderMenu :: Event t (m (Event t (ContextMenuEvent a)))
+            eRenderMenu =
+              ePostBuild $> do
+              (menuX, menuY) <- do
+                nodeRect :: DOMRect <- Element.getBoundingClientRect $ Dom._element_raw nodeElement
+                nodeX <- DOMRect.getX nodeRect
+                nodeY <- DOMRect.getY nodeRect
+                nodeHeight <- DOMRect.getHeight nodeRect
+                pure (nodeX, nodeY + nodeHeight)
+              let
+                pos x y = Text.pack $ "left: " <> show x <> "px;" <> " " <> "top: " <> show y <> "px;"
+                contextMenuAttrs = "id" Dom.=: "context-menu" <> "style" Dom.=: pos menuX menuY
+              Dom.elAttr "div" contextMenuAttrs $ do
+                contextMenuEntries contextMenuControls path
+          switchDyn <$> Dom.widgetHold (pure never) eRenderMenu
+        _ ->
+          pure never
+
+    dMkMenu = mkMenu <$> dMenu
+  in
+    switchDyn <$> Dom.widgetHold (join . sample $ current dMkMenu) (updated dMkMenu)
+
+
 renderNodeHash ::
   forall t m a b.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
@@ -841,37 +887,7 @@ renderNodeHash contextMenuControls controls dMenu versioned focus path h = do
     (nodeElement, (eChildren, childrenInfo)) <-
       renderNode controls contextMenuControls dMenu versioned focus path inFocus dHovered mNode
 
-  let
-    mkMenu :: Menu -> m (Event t (ContextMenuEvent a))
-    mkMenu menu =
-      case menu of
-        MenuOpen | Focus (Nil :: Path b c) <- focus -> do
-          -- we delay the rendering of the menu because it needs some JS properties that aren't
-          -- present if we render immediately
-          ePostBuild <- delay 0.05 =<< getPostBuild
-          let
-            eRenderMenu :: Event t (m (Event t (ContextMenuEvent a)))
-            eRenderMenu =
-              ePostBuild $> do
-              (menuX, menuY) <- do
-                nodeRect :: DOMRect <- Element.getBoundingClientRect $ Dom._element_raw nodeElement
-                nodeX <- DOMRect.getX nodeRect
-                nodeY <- DOMRect.getY nodeRect
-                nodeHeight <- DOMRect.getHeight nodeRect
-                pure (nodeX, nodeY + nodeHeight)
-              let
-                pos x y = Text.pack $ "left: " <> show x <> "px;" <> " " <> "top: " <> show y <> "px;"
-                contextMenuAttrs = "id" Dom.=: "context-menu" <> "style" Dom.=: pos menuX menuY
-              Dom.elAttr "div" contextMenuAttrs $ do
-                contextMenuEntries contextMenuControls path
-          switchDyn <$> Dom.widgetHold (pure never) eRenderMenu
-        _ ->
-          pure never
-
-    dMkMenu = mkMenu <$> dMenu
-
-  eContextMenu :: Event t (ContextMenuEvent a) <-
-    switchDyn <$> Dom.widgetHold (join . sample $ current dMkMenu) (updated dMkMenu)
+  eContextMenu :: Event t (ContextMenuEvent a) <- renderContextMenu contextMenuControls dMenu focus path nodeElement
 
   let
     nodeInfo =
