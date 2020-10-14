@@ -436,6 +436,9 @@ syntaxNodeD' attrs = Dom.elDynAttr' "div" . fmap unAttrs $ ("class" =: "syntax-n
 syntaxKeyword :: DomBuilder t m => Attrs -> m a -> m a
 syntaxKeyword attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-keyword" <> attrs
 
+syntaxLiteral :: DomBuilder t m => Attrs -> m a -> m a
+syntaxLiteral attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-literal" <> attrs
+
 syntaxSymbol :: DomBuilder t m => Attrs -> m a -> m a
 syntaxSymbol attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-symbol" <> attrs
 
@@ -713,10 +716,10 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   body
               pure (leftmost [eDefName, eDefBody], defNameInfo <> defBodyInfo)
             NBool b ->
-              ((never, mempty) <$) . syntaxKeyword mempty . Dom.text $
+              ((never, mempty) <$) . syntaxLiteral mempty . Dom.text $
               if b then "true" else "false"
             NInt n ->
-              ((never, mempty) <$) . syntaxKeyword mempty . Dom.text $
+              ((never, mempty) <$) . syntaxLiteral mempty . Dom.text $
               Text.pack (show n)
             NBinOp op left right ->
               syntaxInline mempty $ do
@@ -1070,6 +1073,7 @@ main = do
          bgColor = "#f8f8f8"
 
          keyword = "#354b98"
+         literal = "#268884"
          symbol = "#974fbc"
 
          contextMenuBg = "#ececec"
@@ -1115,6 +1119,7 @@ main = do
          , ""
          , ".syntax-statement {"
          , "  padding-left: 0.25em;"
+         , "  padding-right: 0.25em;"
          , "  border-radius: 0.1em;"
          , "}"
          , ""
@@ -1163,6 +1168,9 @@ main = do
          , ".syntax-focused {"
          , "}"
          , ""
+         , ".syntax-literal {"
+         , "  color: " <> literal <> ";"
+         , "}"
          , ".syntax-keyword {"
          , "  color: " <> keyword <> ";"
          , "  font-weight: 500;"
