@@ -12,6 +12,7 @@ import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
 import Data.Foldable (for_)
+import Data.Functor (($>))
 import Data.Functor.Identity (Identity(..))
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -841,21 +842,34 @@ renderNodeHash contextMenuControls controls dMenu versioned focus path h = do
     mkMenu menu =
       case menu of
         MenuOpen | Focus (Nil :: Path b c) <- focus -> do
-          nodeRect :: DOMRect <- Element.getBoundingClientRect $ Dom._element_raw nodeElement
-          nodeX <- DOMRect.getX nodeRect
-          nodeY <- DOMRect.getY nodeRect
-          nodeHeight <- DOMRect.getHeight nodeRect
-          let pos = Text.pack $ "left: " <> show nodeX <> "px;" <> " " <> "top: " <> show (nodeY + nodeHeight) <> "px;"
-          Dom.elAttr "div" ("id" Dom.=: "context-menu" <> "style" Dom.=: pos) $ do
-            let currentNodeType = nodeType @c
-            Dom.elAttr "div" ("id" Dom.=: "context-menu-title") . Dom.el "i" . Dom.text $
-              (case currentNodeType of
-                TBlock -> "block"
-                TExpr -> "expr"
-                TStatement -> "statement"
-                TIdent -> "identifier"
-              ) <> " menu"
-            contextMenuEntries contextMenuControls path
+          -- we delay the rendering of the menu because it needs some JS properties that aren't
+          -- present if we render immediately
+          ePostBuild <- delay 0.05 =<< getPostBuild
+          let
+            eRenderMenu :: Event t (m (Event t (ContextMenuEvent a)))
+            eRenderMenu =
+              ePostBuild $> do
+              (menuX, menuY) <- do
+                nodeRect :: DOMRect <- Element.getBoundingClientRect $ Dom._element_raw nodeElement
+                nodeX <- DOMRect.getX nodeRect
+                nodeY <- DOMRect.getY nodeRect
+                nodeHeight <- DOMRect.getHeight nodeRect
+                pure (nodeX, nodeY + nodeHeight)
+              let
+                pos x y = Text.pack $ "left: " <> show x <> "px;" <> " " <> "top: " <> show y <> "px;"
+                attrs =
+                  "id" Dom.=: "context-menu" <> "style" Dom.=: pos menuX menuY
+              Dom.elAttr "div" attrs $ do
+                let currentNodeType = nodeType @c
+                Dom.elAttr "div" ("id" Dom.=: "context-menu-title") . Dom.el "i" . Dom.text $
+                  (case currentNodeType of
+                    TBlock -> "block"
+                    TExpr -> "expr"
+                    TStatement -> "statement"
+                    TIdent -> "identifier"
+                  ) <> " menu"
+                contextMenuEntries contextMenuControls path
+          switchDyn <$> Dom.widgetHold (pure never) eRenderMenu
         _ ->
           pure never
 
@@ -870,13 +884,17 @@ renderNodeHash contextMenuControls controls dMenu versioned focus path h = do
       { niHovered = dMouseInside
       }
 
+  let
+    eOpenMenu =
+      attachWithMaybe
+        (\menu () -> if inFocus && menu == MenuClosed then Just OpenMenu else Nothing)
+        (current dMenu)
+        (ncOpenMenu controls)
+
   pure
     ( leftmost
       [ eChildren
-      , attachWithMaybe
-          (\menu () -> if inFocus && menu == MenuClosed then Just OpenMenu else Nothing)
-          (current dMenu)
-          (ncOpenMenu controls)
+      , eOpenMenu
       , attachWithMaybe
           (\menu () -> if menu == MenuOpen then Just CloseMenu else Nothing)
           (current dMenu)
