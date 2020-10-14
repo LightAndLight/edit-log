@@ -8,10 +8,11 @@
 {-# language TypeApplications #-}
 module Main where
 
+import Control.Applicative ((<|>))
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
-import Data.Foldable (for_)
+import Data.Foldable (asum, for_)
 import Data.Functor (($>))
 import Data.Functor.Identity (Identity(..))
 import Data.Map (Map)
@@ -430,7 +431,11 @@ syntaxNode attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-node" <> attr
 syntaxNode' :: DomBuilder t m => Attrs -> m a -> m (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a)
 syntaxNode' attrs = Dom.elAttr' "div" . unAttrs $ "class" =: "syntax-node" <> attrs
 
-syntaxNodeD' :: (DomBuilder t m, PostBuild t m) => Dynamic t Attrs -> m a -> m (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a)
+syntaxNodeD' ::
+  (DomBuilder t m, PostBuild t m) =>
+  Dynamic t Attrs ->
+  m a ->
+  m (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a)
 syntaxNodeD' attrs = Dom.elDynAttr' "div" . fmap unAttrs $ ("class" =: "syntax-node" <>) <$> attrs
 
 syntaxKeyword :: DomBuilder t m => Attrs -> m a -> m a
@@ -503,7 +508,10 @@ renderNode ::
   Bool ->
   Dynamic t Bool ->
   Maybe (Node b) ->
-  m (Dom.Element Dom.EventResult GhcjsDomSpace t, (Event t (NodeEvent a), NodeInfo t))
+  m
+    ( Dom.Element Dom.EventResult GhcjsDomSpace t
+    , (Event t (NodeEvent a), NodeInfo t, Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
+    )
 renderNode controls contextMenuControls dMenu versioned focus path inFocus dHovered mNode =
   let
     dAttrs =
@@ -523,19 +531,18 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
     syntaxNodeD' dAttrs $
       case mNode of
         Nothing ->
-          (never, mempty) <$ Dom.text "error: missing node"
+          (never, mempty, Nothing) <$ Dom.text "error: missing node"
         Just node ->
           case node of
             NIdent n ->
-              (never, mempty) <$ Dom.text (Text.pack n)
+              (never, mempty, Nothing) <$ Dom.text (Text.pack n)
             NIHole ->
-              (never, mempty) <$ syntaxHole mempty
-
+              (never, mempty, Nothing) <$ syntaxHole mempty
             NFor ident val body -> do
-              ((eForIdent, forIdentInfo), (eForExpr, forExprInfo)) <-
+              ((eForIdent, forIdentInfo, forIdentFocus), (eForExpr, forExprInfo, forExprFocus)) <-
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "for"
-                  eForIdent <-
+                  forIdent <-
                     renderNodeHash
                       contextMenuControls
                       controls
@@ -548,7 +555,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                       (Path.snoc path For_Ident)
                       ident
                   syntaxKeyword mempty $ Dom.text "in"
-                  eForExpr <-
+                  forExpr <-
                     renderNodeHash
                       contextMenuControls
                       controls
@@ -561,8 +568,8 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                       (Path.snoc path For_Expr)
                       val
                   syntaxColon mempty
-                  pure (eForIdent, eForExpr)
-              (eForBlock, forBlockInfo) <-
+                  pure (forIdent, forExpr)
+              (eForBlock, forBlockInfo, forBlockFocus) <-
                 syntaxNested mempty $
                 renderNodeHash
                   contextMenuControls
@@ -575,9 +582,13 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   )
                   (Path.snoc path For_Block)
                   body
-              pure (leftmost [eForIdent, eForExpr, eForBlock], forIdentInfo <> forExprInfo <> forBlockInfo)
+              pure
+                ( leftmost [eForIdent, eForExpr, eForBlock]
+                , forIdentInfo <> forExprInfo <> forBlockInfo
+                , forIdentFocus <|> forExprFocus <|> forBlockFocus
+                )
             NIfThen cond then_ -> do
-              (eIfThenCond, ifThenCondInfo) <-
+              (eIfThenCond, ifThenCondInfo, ifThenCondFocus) <-
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "if"
                   ifThenCond <-
@@ -594,7 +605,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                       cond
                   syntaxColon mempty
                   pure ifThenCond
-              (eIfThenThen, ifThenThenInfo) <-
+              (eIfThenThen, ifThenThenInfo, ifThenThenFocus) <-
                 syntaxNested mempty $
                 renderNodeHash
                   contextMenuControls
@@ -607,9 +618,13 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   )
                   (Path.snoc path IfThen_Then)
                   then_
-              pure (leftmost [eIfThenCond, eIfThenThen], ifThenCondInfo <> ifThenThenInfo)
+              pure
+                ( leftmost [eIfThenCond, eIfThenThen]
+                , ifThenCondInfo <> ifThenThenInfo
+                , ifThenCondFocus <|> ifThenThenFocus
+                )
             NIfThenElse cond then_ else_ -> do
-              (eIfThenElseCond, ifThenElseCondInfo) <-
+              (eIfThenElseCond, ifThenElseCondInfo, ifThenElseCondFocus) <-
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "if"
                   ifThenElseCond <-
@@ -626,7 +641,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                       cond
                   syntaxColon mempty
                   pure ifThenElseCond
-              (eIfThenElseThen, ifThenElseThenInfo) <-
+              (eIfThenElseThen, ifThenElseThenInfo, ifThenElseThenFocus) <-
                 syntaxNested mempty $
                 renderNodeHash
                   contextMenuControls
@@ -642,7 +657,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
               syntaxLine mempty $ do
                 syntaxKeyword mempty $ Dom.text "else"
                 syntaxColon mempty
-              (eIfThenElseElse, ifThenElseElseInfo) <-
+              (eIfThenElseElse, ifThenElseElseInfo, ifThenElseElseFocus) <-
                 syntaxNested mempty $
                 renderNodeHash
                   contextMenuControls
@@ -658,6 +673,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
               pure
                 ( leftmost [eIfThenElseCond, eIfThenElseThen, eIfThenElseElse]
                 , ifThenElseCondInfo <> ifThenElseThenInfo <> ifThenElseElseInfo
+                , ifThenElseCondFocus <|> ifThenElseThenFocus <|> ifThenElseElseFocus
                 )
             NPrint val ->
               syntaxLine mempty $ do
@@ -675,7 +691,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   (Path.snoc path Print_Value)
                   val
             NDef name args body -> do
-              (eDefName, defNameInfo) <-
+              (eDefName, defNameInfo, defNameFocus) <-
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "def"
                   defName <-
@@ -701,7 +717,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   syntaxRParen mempty
                   syntaxColon mempty
                   pure defName
-              (eDefBody, defBodyInfo) <-
+              (eDefBody, defBodyInfo, defBodyFocus) <-
                 syntaxNested mempty $
                 renderNodeHash
                   contextMenuControls
@@ -714,16 +730,20 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   )
                   (Path.snoc path Def_Body)
                   body
-              pure (leftmost [eDefName, eDefBody], defNameInfo <> defBodyInfo)
+              pure
+                ( leftmost [eDefName, eDefBody]
+                , defNameInfo <> defBodyInfo
+                , defNameFocus <|> defBodyFocus
+                )
             NBool b ->
-              ((never, mempty) <$) . syntaxLiteral mempty . Dom.text $
+              ((never, mempty, Nothing) <$) . syntaxLiteral mempty . Dom.text $
               if b then "true" else "false"
             NInt n ->
-              ((never, mempty) <$) . syntaxLiteral mempty . Dom.text $
+              ((never, mempty, Nothing) <$) . syntaxLiteral mempty . Dom.text $
               Text.pack (show n)
             NBinOp op left right ->
               syntaxInline mempty $ do
-                (eBinOpLeft, binOpLeftInfo) <-
+                (eBinOpLeft, binOpLeftInfo, binOpLeftFocus) <-
                   renderNodeHash
                     contextMenuControls
                     controls
@@ -742,7 +762,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   Div -> syntaxSymbol mempty $ Dom.text "/"
                   And -> syntaxKeyword mempty $ Dom.text "and"
                   Or -> syntaxKeyword mempty $ Dom.text "or"
-                (eBinOpRight, binOpRightInfo) <-
+                (eBinOpRight, binOpRightInfo, binOpRightFocus) <-
                   renderNodeHash
                     contextMenuControls
                     controls
@@ -754,7 +774,11 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                     )
                     (Path.snoc path BinOp_Right)
                     right
-                pure (leftmost [eBinOpLeft, eBinOpRight], binOpLeftInfo <> binOpRightInfo)
+                pure
+                  ( leftmost [eBinOpLeft, eBinOpRight]
+                  , binOpLeftInfo <> binOpRightInfo
+                  , binOpLeftFocus <|> binOpRightFocus
+                  )
             NUnOp op val ->
               syntaxInline mempty $ do
                 case op of
@@ -785,14 +809,18 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                           renderNodeHash contextMenuControls controls dMenu versioned NoFocus path' st
                   )
                   (zip [0::Int ..] sts)
-              pure (leftmost $ fst <$> nodes, foldMap snd nodes)
+              pure
+                ( leftmost $ (\(a, _, _) -> a) <$> nodes
+                , foldMap (\(_, a, _) -> a) nodes
+                , asum $ (\(_, _, a) -> a) <$> nodes
+                )
             NSHole ->
-              (never, mempty) <$ syntaxHole mempty
+              (never, mempty, Nothing) <$ syntaxHole mempty
             NEHole ->
-              (never, mempty) <$ syntaxHole mempty
+              (never, mempty, Nothing) <$ syntaxHole mempty
 
 renderContextMenu ::
-  forall t m a b.
+  forall t m a.
   ( Reflex t, MonadHold t m
   , DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
   , PostBuild t m, TriggerEvent t m, PerformEvent t m, MonadJSM (Performable m)
@@ -800,16 +828,19 @@ renderContextMenu ::
   ) =>
   ContextMenuControls t ->
   Dynamic t Menu ->
-  Focus b ->
-  Path a b ->
-  Dom.Element Dom.EventResult GhcjsDomSpace t ->
+  Dynamic t (Focus a) ->
+  Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)) ->
   m (Event t (ContextMenuEvent a))
-renderContextMenu contextMenuControls dMenu focus path nodeElement =
+renderContextMenu contextMenuControls dMenu dFocus dFocusElement =
   let
-    mkMenu :: Menu -> m (Event t (ContextMenuEvent a))
-    mkMenu menu =
+    mkMenu ::
+      Menu ->
+      Focus a ->
+      Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t) ->
+      m (Event t (ContextMenuEvent a))
+    mkMenu menu focus mNodeElement =
       case menu of
-        MenuOpen | Focus (Nil :: Path b c) <- focus -> do
+        MenuOpen | Focus path <- focus, Just nodeElement <- mNodeElement -> do
           -- we delay the rendering of the menu because it needs some JS properties that aren't
           -- present if we render immediately
           ePostBuild <- delay 0.05 =<< getPostBuild
@@ -832,10 +863,9 @@ renderContextMenu contextMenuControls dMenu focus path nodeElement =
         _ ->
           pure never
 
-    dMkMenu = mkMenu <$> dMenu
+    dMkMenu = mkMenu <$> dMenu <*> dFocus <*> dFocusElement
   in
     switchDyn <$> Dom.widgetHold (join . sample $ current dMkMenu) (updated dMkMenu)
-
 
 renderNodeHash ::
   forall t m a b.
@@ -853,7 +883,11 @@ renderNodeHash ::
   Focus b ->
   Path a b ->
   Hash b ->
-  m (Event t (NodeEvent a), NodeInfo t)
+  m
+    ( Event t (NodeEvent a)
+    , NodeInfo t
+    , Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)
+    )
 renderNodeHash contextMenuControls controls dMenu versioned focus path h = do
   rec
     let
@@ -884,10 +918,8 @@ renderNodeHash contextMenuControls controls dMenu versioned focus path h = do
       eClicked = gate (current dHovered) eMousedown
 
     let Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
-    (nodeElement, (eChildren, childrenInfo)) <-
+    (nodeElement, (eChildren, childrenInfo, childFocus)) <-
       renderNode controls contextMenuControls dMenu versioned focus path inFocus dHovered mNode
-
-  eContextMenu :: Event t (ContextMenuEvent a) <- renderContextMenu contextMenuControls dMenu focus path nodeElement
 
   let
     nodeInfo =
@@ -910,10 +942,10 @@ renderNodeHash contextMenuControls controls dMenu versioned focus path h = do
           (\menu () -> if menu == MenuOpen then Just CloseMenu else Nothing)
           (current dMenu)
           (ncCloseMenu controls)
-      , ContextMenuEvent <$> eContextMenu
       , Select path <$ eClicked
       ]
     , nodeInfo
+    , childFocus <|> (if inFocus then Just nodeElement else Nothing)
     )
 
 data EditAction a where
@@ -1057,20 +1089,31 @@ editor initial initialFocus = do
         eNode
 
     let
-      dRenderNodeHash :: Dynamic t (m (Event t (NodeEvent a)))
+      dRenderNodeHash :: Dynamic t (m (Event t (NodeEvent a), Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)))
       dRenderNodeHash =
         (\versioned focus -> do
           let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot
-          (nodeEvent, _) <- renderNodeHash contextMenuControls nodeControls dMenu versioned focus Nil rooth
-          pure nodeEvent
+          (nodeEvent, _, focusNode) <-
+            renderNodeHash contextMenuControls nodeControls dMenu versioned focus Nil rooth
+          pure (nodeEvent, focusNode)
         ) <$>
         dVersioned <*>
         dFocus
 
-    eNode :: Event t (NodeEvent a) <- do
-      dNodeEvent :: Dynamic t (Event t (NodeEvent a)) <-
-        Dom.widgetHold (join . sample $ current dRenderNodeHash) (updated dRenderNodeHash)
-      pure $ switchDyn dNodeEvent
+    dRenderNodeHash' :: Dynamic t (Event t (NodeEvent a), Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)) <-
+      Dom.widgetHold (join . sample $ current dRenderNodeHash) (updated dRenderNodeHash)
+
+    let
+      dFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
+      dFocusElement = snd <$> dRenderNodeHash'
+
+      eRenderNode :: Event t (NodeEvent a)
+      eRenderNode = switchDyn $ fst <$> dRenderNodeHash'
+
+    let eNode = leftmost [ContextMenuEvent <$> eContextMenu, eRenderNode]
+
+    eContextMenu :: Event t (ContextMenuEvent a) <-
+      renderContextMenu contextMenuControls dMenu dFocus dFocusElement
 
   pure ()
 
