@@ -435,6 +435,15 @@ syntaxKeyword attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-keyword" <
 syntaxSymbol :: DomBuilder t m => Attrs -> m a -> m a
 syntaxSymbol attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-symbol" <> attrs
 
+syntaxLParen :: DomBuilder t m => Attrs -> m ()
+syntaxLParen attrs = syntaxSymbol ("class" =: "syntax-paren" <> attrs) $ Dom.text "("
+
+syntaxRParen :: DomBuilder t m => Attrs -> m ()
+syntaxRParen attrs = syntaxSymbol ("class" =: "syntax-paren" <> attrs) $ Dom.text ")"
+
+syntaxColon :: DomBuilder t m => Attrs -> m ()
+syntaxColon attrs = syntaxSymbol ("class" =: "syntax-colon" <> attrs) $ Dom.text ":"
+
 syntaxNested :: DomBuilder t m => Attrs -> m a -> m a
 syntaxNested attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-nested" <> attrs
 
@@ -571,7 +580,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                         )
                         (Path.snoc path For_Expr)
                         val
-                    syntaxSymbol mempty $ Dom.text ":"
+                    syntaxColon mempty
                     pure (eForIdent, eForExpr)
                 (eForBlock, forBlockInfo) <-
                   syntaxNested mempty $
@@ -603,7 +612,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                         )
                         (Path.snoc path IfThen_Cond)
                         cond
-                    syntaxSymbol mempty $ Dom.text ":"
+                    syntaxColon mempty
                     pure ifThenCond
                 (eIfThenThen, ifThenThenInfo) <-
                   syntaxNested mempty $
@@ -635,7 +644,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                         )
                         (Path.snoc path IfThenElse_Cond)
                         cond
-                    syntaxSymbol mempty $ Dom.text ":"
+                    syntaxColon mempty
                     pure ifThenElseCond
                 (eIfThenElseThen, ifThenElseThenInfo) <-
                   syntaxNested mempty $
@@ -652,7 +661,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                     then_
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "else"
-                  syntaxSymbol mempty $ Dom.text ":"
+                  syntaxColon mempty
                 (eIfThenElseElse, ifThenElseElseInfo) <-
                   syntaxNested mempty $
                   renderNode
@@ -673,7 +682,7 @@ renderNode contextMenuControls controls menu versioned focus path h = do
               NPrint val ->
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "print"
-                  syntaxSymbol mempty $ Dom.text ":"
+                  syntaxColon mempty
                   renderNode
                     contextMenuControls
                     controls
@@ -701,16 +710,16 @@ renderNode contextMenuControls controls menu versioned focus path h = do
                         )
                         (Path.snoc path Def_Name)
                         name
+                    syntaxLParen mempty
                     case args of
-                      [] -> syntaxSymbol mempty $ Dom.text "()"
+                      [] -> pure ()
                       a : as -> do
-                        syntaxSymbol mempty $ Dom.text "("
                         renderIdent a
                         for_ as $ \x -> do
                           syntaxSymbol mempty $ Dom.text ","
                           renderIdent x
-                        syntaxSymbol mempty $ Dom.text ")"
-                    syntaxSymbol mempty $ Dom.text ":"
+                    syntaxRParen mempty
+                    syntaxColon mempty
                     pure defName
                 (eDefBody, defBodyInfo) <-
                   syntaxNested mempty $
@@ -1012,6 +1021,7 @@ main = do
        let
          bgColor = "#f3f3f3"
          keyword = "#354b98"
+         symbol = "#974fbc"
 
 
          holeInactiveText = "rgba(0, 0, 0, 0.3)"
@@ -1051,24 +1061,36 @@ main = do
          , "  border-radius: 0.1em;"
          , "}"
          , ""
+         , ".syntax-focused.syntax-node {"
+         , "  background-color: " <> nodeActiveBg <> ";"
+         , "}"
+         , ""
+         , ".syntax-hovered.syntax-node {"
+         , "  background-color: " <> nodeHoveredBg <> ";"
+         , "}"
+         , ""
          , ".syntax-focused.syntax-statement {"
          , "  box-shadow: inset 2px 0px 0 " <> nodeActive <> ";"
-         , "  background-color: " <> nodeActiveBg <> ";"
          , "}"
          , ""
          , ".syntax-hovered.syntax-statement {"
          , "  box-shadow: inset 2px 0px 0 " <> nodeHovered <> ";"
-         , "  background-color: " <> nodeHoveredBg <> ";"
          , "}"
          , ""
          , ".syntax-focused.syntax-expr {"
          , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
-         , "  color: " <> holeActiveText <> ";"
          , "}"
          , ""
          , ".syntax-hovered.syntax-expr {"
          , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
-         , "  color: " <> holeHoveredText <> ";"
+         , "}"
+         , ""
+         , ".syntax-focused.syntax-ident {"
+         , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
+         , "}"
+         , ""
+         , ".syntax-hovered.syntax-ident {"
+         , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
          , "}"
          , ""
          , ".syntax-focused.syntax-hole {"
@@ -1090,6 +1112,7 @@ main = do
          , "}"
          , ""
          , ".syntax-symbol {"
+         , "  color: " <> symbol <> ";"
          , "}"
          , ""
          , ".syntax-hovered {"
@@ -1118,6 +1141,14 @@ main = do
          , "  margin-left: 0.5em;"
          , "}"
          , ""
+         , ".syntax-node + .syntax-symbol.syntax-paren {"
+         , "  margin-left: 0em;"
+         , "}"
+         , ""
+         , ".syntax-node + .syntax-symbol.syntax-colon {"
+         , "  margin-left: 0em;"
+         , "}"
+         , ""
          , ".syntax-node + .syntax-keyword {"
          , "  margin-left: 0.5em;"
          , "}"
@@ -1128,6 +1159,10 @@ main = do
          , ""
          , ".syntax-symbol + .syntax-node {"
          , "  margin-left: 0.5em;"
+         , "}"
+         , ""
+         , ".syntax-symbol.syntax-paren + .syntax-node {"
+         , "  margin-left: 0em;"
          , "}"
          , ""
          , ".syntax-keyword + .syntax-node {"
