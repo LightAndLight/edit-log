@@ -315,7 +315,7 @@ contextMenuEntries controls path = do
       Dynamic t ContextMenuSelection ->
       m (Dynamic t Bool, Event t (ContextMenuEvent a))
     renderInputField dSelected = do
-      (inputElement, _) <- Dom.elAttr' "input" ("type" Dom.=: "text") $ pure ()
+      (inputElement, _) <- Dom.elAttr' "input" ("type" Dom.=: "text" <> "id" Dom.=: "context-menu-input") $ pure ()
 
       let
         htmlInputElement :: HTMLInputElement
@@ -376,31 +376,32 @@ contextMenuEntries controls path = do
       Dynamic t ContextMenuSelection ->
       [ContextMenuEntry b] ->
       m (Int, Event t (ContextMenuEvent a))
-    renderEntries dInputFocused dSelection entries = do
-      for_ (zip [0..] entries) $ \(ix, entry) ->
-        let
-          dAttrs =
-            (\selection ->
-              "class" Dom.=:
-                ("context-menu-entry" <>
-                 if MenuEntry ix == selection then " context-menu-entry-highlighted" else ""
-                )
-            ) <$>
-            dSelection
-        in
-          Dom.elDynAttr "div" dAttrs $
-          Dom.text $ entryTitle entry
-      pure
-        ( length entries
-        , attachWithMaybe
-            (\selection () ->
-               case selection of
-                 MenuEntry ix -> Just . Choose path $ entries !! ix
-                 _ -> Nothing
-            )
-            (current dSelection)
-            (gate (not <$> current dInputFocused) (cmcChoose controls))
-        )
+    renderEntries dInputFocused dSelection entries =
+      Dom.elAttr "div" ("id" Dom.=: "context-menu-entries") $ do
+        for_ (zip [0..] entries) $ \(ix, entry) ->
+          let
+            dAttrs =
+              (\selection ->
+                "class" Dom.=:
+                  ("context-menu-entry" <>
+                  if MenuEntry ix == selection then " context-menu-entry-highlighted" else ""
+                  )
+              ) <$>
+              dSelection
+          in
+            Dom.elDynAttr "div" dAttrs $
+            Dom.text $ entryTitle entry
+        pure
+          ( length entries
+          , attachWithMaybe
+              (\selection () ->
+                case selection of
+                  MenuEntry ix -> Just . Choose path $ entries !! ix
+                  _ -> Nothing
+              )
+              (current dSelection)
+              (gate (not <$> current dInputFocused) (cmcChoose controls))
+          )
 
 syntaxHole :: DomBuilder t m => Attrs -> m ()
 syntaxHole attrs =
@@ -857,17 +858,8 @@ renderNodeHash contextMenuControls controls dMenu versioned focus path h = do
                 pure (nodeX, nodeY + nodeHeight)
               let
                 pos x y = Text.pack $ "left: " <> show x <> "px;" <> " " <> "top: " <> show y <> "px;"
-                attrs =
-                  "id" Dom.=: "context-menu" <> "style" Dom.=: pos menuX menuY
-              Dom.elAttr "div" attrs $ do
-                let currentNodeType = nodeType @c
-                Dom.elAttr "div" ("id" Dom.=: "context-menu-title") . Dom.el "i" . Dom.text $
-                  (case currentNodeType of
-                    TBlock -> "block"
-                    TExpr -> "expr"
-                    TStatement -> "statement"
-                    TIdent -> "identifier"
-                  ) <> " menu"
+                contextMenuAttrs = "id" Dom.=: "context-menu" <> "style" Dom.=: pos menuX menuY
+              Dom.elAttr "div" contextMenuAttrs $ do
                 contextMenuEntries contextMenuControls path
           switchDyn <$> Dom.widgetHold (pure never) eRenderMenu
         _ ->
@@ -1075,10 +1067,12 @@ main = do
          )
          (pure ())
        let
-         bgColor = "#f3f3f3"
+         bgColor = "#f8f8f8"
+
          keyword = "#354b98"
          symbol = "#974fbc"
 
+         contextMenuBg = "#ececec"
 
          holeInactiveText = "rgba(0, 0, 0, 0.3)"
          holeInactive = "rgba(0, 0, 0, 0.2)"
@@ -1095,11 +1089,18 @@ main = do
          nodeActiveBg = "rgba(0, 0, 0, 0.05)"
          nodeActive = "#fb3abe"
 
+         inputFocus = "rgb(255,131,208)"
+
        Dom.el "style" . Dom.text $
          Text.unlines
          [ "html {"
          , "  font-family: 'Source Code Pro', monospace;"
          , "  background-color: " <> bgColor <> ";"
+         , "}"
+         , ""
+         , "input {"
+         , "  font-family: 'Source Code Pro', monospace;"
+         , "  font-size: 1em;"
          , "}"
          , ""
          , ".syntax-node {"
@@ -1230,12 +1231,38 @@ main = do
          , "}"
          , ""
          , "#context-menu {"
-         , "  border: 2px solid black;"
+         , "  background-color: " <> contextMenuBg <> ";"
+         , "  border: 0px solid transparent;"
+         , "  border-radius: 0.1em;"
          , "  position: absolute;"
+         , "  box-shadow: 0 3px 4px 0px rgba(0, 0, 0, 0.4);"
+         , "  padding: 0.25em;"
+         , "}"
+         , ""
+         , "#context-menu-entries {"
+         , "}"
+         , ""
+         , ".context-menu-entry {"
+         , "  padding-left: 0.25em;"
+         , "  padding-top: 0.125em;"
+         , "  padding-bottom: 0.125em;"
          , "}"
          , ""
          , ".context-menu-entry-highlighted {"
-         , "  background-color: grey;"
+         , "  background-color: " <> inputFocus <> ";"
+         , "}"
+         , ""
+         , "#context-menu-input {"
+         , "  outline: none;"
+         , "  width: 100%;"
+         , "  box-sizing: border-box;"
+         , "  padding: 0.25em;"
+         , "  border-radius: 0.1em;"
+         , "  border: 1px solid " <> holeInactive <> ";"
+         , "}"
+         , ""
+         , "#context-menu-input:focus {"
+         , "  border: 1px solid " <> inputFocus <> ";"
          , "}"
          ]
     )
