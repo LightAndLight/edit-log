@@ -1053,14 +1053,14 @@ editor initial initialFocus = do
                        EntryFalse -> Bool False
                        EntryInt -> Int 0
                        EntryAdd -> BinOp Add EHole EHole
-                       EntrySubtract -> BinOp Add EHole EHole
+                       EntrySubtract -> BinOp Sub EHole EHole
                        EntryMultiply -> BinOp Mul EHole EHole
                        EntryDivide -> BinOp Div EHole EHole
                        EntryOr -> BinOp Or EHole EHole
                        EntryAnd -> BinOp And EHole EHole
                        EntryNot -> UnOp Not EHole
                        EntryNeg -> UnOp Neg EHole
-                       EntryFor -> For (Ident "x") EHole (Block [SHole])
+                       EntryFor -> For IHole EHole (Block [SHole])
                        EntryIfThen -> IfThen EHole (Block [SHole])
                        EntryIfThenElse -> IfThenElse EHole (Block [SHole]) (Block [SHole])
                        EntryPrint -> Print EHole
