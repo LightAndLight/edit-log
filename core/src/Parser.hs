@@ -3,15 +3,17 @@ module Parser
   , ParseError(..)
   , runParser
   , expr
+  , ident
+  , simpleStatement
   )
 where
 
 import Control.Applicative ((<|>), many, optional, some)
-import Text.Parser.Combinators (eof)
-import Text.Parser.Char (CharParsing, char, digit, string, spaces)
+import Text.Parser.Combinators (between, eof, sepBy)
+import Text.Parser.Char (CharParsing, alphaNum, char, digit, lower, string, spaces)
 import Text.ParserCombinators.ReadP (ReadP, readP_to_S)
 
-import Syntax (Expr(..), BinOp(..), UnOp(..))
+import Syntax (Block(..), Expr(..), Ident(..), Statement(..), BinOp(..), UnOp(..))
 
 type Parser = ReadP
 
@@ -24,11 +26,12 @@ runParser p input =
     [] -> Left ParseError
     (a, _) : _ -> Right a
 
+token :: CharParsing m => m a -> m a
+token p = p <* spaces
+
 expr :: CharParsing m => m Expr
 expr = orOp
   where
-    token p = p <* spaces
-
     orOp = foldl (BinOp Or) <$> andOp <*> many (token (string "or") *> andOp)
 
     andOp = foldl (BinOp And) <$> eqOp <*> many (token (string "and") *> eqOp)
@@ -65,3 +68,40 @@ expr = orOp
       some digit
 
     hole = EHole <$ char '?'
+
+ident :: CharParsing m => m Ident
+ident =
+  (\h t -> Ident $ h : t) <$> lower <*> many alphaNum <|>
+  IHole <$ char '?'
+
+simpleStatement :: CharParsing m => m Statement
+simpleStatement =
+  forSt <|>
+  ifSt <|>
+  printSt <|>
+  defSt <|>
+  SHole <$ token (char '?')
+  where
+    printSt =
+      Print <$ token (string "print") <* token (char ':') <*>
+      expr
+
+    forSt =
+      (\i e -> For i e . Block . pure) <$ token (string "for") <*>
+      token ident <* token (string "in") <*>
+      expr <* token (char ':') <*>
+      simpleStatement
+
+    ifSt =
+      (\cond then_ mElse_ ->
+         maybe (IfThen cond $ Block [then_]) (IfThenElse cond (Block [then_]) . Block . pure) mElse_
+      ) <$ token (string "if") <*>
+      expr <* token (char ':') <*>
+      simpleStatement <*>
+      optional (token (string "else") *> token (char ':') *> simpleStatement)
+
+    defSt =
+      (\n args -> Def n args . Block . pure) <$ token (string "def") <*>
+      token ident <*>
+      between (token $ char '(') (token $ char ')') (ident `sepBy` token (char ',')) <* token (char ':') <*>
+      simpleStatement

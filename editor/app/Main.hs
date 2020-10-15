@@ -247,8 +247,8 @@ contextMenuEntries controls path = do
           , case nodeType @b of
               TBlock -> Left Parser.ParseError
               TExpr -> Parser.runParser Parser.expr $ Text.unpack inputValue
-              TStatement -> Left Parser.ParseError
-              TIdent -> Left Parser.ParseError
+              TStatement -> Parser.runParser Parser.simpleStatement $ Text.unpack inputValue
+              TIdent -> Parser.runParser Parser.ident $ Text.unpack inputValue
           )
         ) <$>
         dInputValue
