@@ -13,7 +13,9 @@ import Syntax (Block(..), Expr(..), Ident(..), Statement(..), UnOp(..), BinOp(..
 
 baseExprCompletions :: [(Text, Expr)]
 baseExprCompletions =
-  [ ("not ?", UnOp Not EHole)
+  [ ("true", Bool True)
+  , ("false", Bool False)
+  , ("not ?", UnOp Not EHole)
   , ("-?", UnOp Neg EHole)
   , ("? + ?", BinOp Add EHole EHole)
   , ("? - ?", BinOp Sub EHole EHole)

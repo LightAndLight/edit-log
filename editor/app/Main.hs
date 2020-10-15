@@ -190,26 +190,23 @@ data ContextMenuEvent a where
   Next :: ContextMenuEvent a
   Prev :: ContextMenuEvent a
 
-data ContextMenuSelection
-  = TextInput
-  | MenuEntry Int
+data MenuEntryIndex
+  = MenuEntry Int
   deriving Eq
 
-menuNext :: Int -> ContextMenuSelection -> ContextMenuSelection
+menuNext :: Int -> MenuEntryIndex -> MenuEntryIndex
 menuNext itemCount s =
   case s of
-    TextInput -> MenuEntry 0
     MenuEntry n
       | n < itemCount -> MenuEntry $ n+1
-      | otherwise -> TextInput
+      | otherwise -> MenuEntry 0
 
-menuPrev :: Int -> ContextMenuSelection -> ContextMenuSelection
+menuPrev :: Int -> MenuEntryIndex -> MenuEntryIndex
 menuPrev itemCount s =
   case s of
-    TextInput -> MenuEntry $ itemCount-1
     MenuEntry n ->
       if n == 0
-      then TextInput
+      then MenuEntry $ itemCount - 1
       else MenuEntry $ n-1
 
 contextMenuEntries ::
@@ -226,18 +223,17 @@ contextMenuEntries ::
   m (Event t (ContextMenuEvent a))
 contextMenuEntries controls path = do
   rec
-    dSelection :: Dynamic t ContextMenuSelection <-
+    dSelection :: Dynamic t MenuEntryIndex <-
       foldDyn
         ($)
-        TextInput
+        (MenuEntry 0)
         (mergeWith
            (.)
            [ menuNext <$> current dCount <@ cmcNext controls
            , menuPrev <$> current dCount <@ cmcPrev controls
-           , const TextInput <$ ffilter id (updated dInputFocused)
            ])
 
-    (dInputFocused, dInputValue, eContextMenu) <- renderInputField dSelection
+    (_, dInputValue, eContextMenu) <- renderInputField
 
     let
       dParseResult :: Dynamic t (Text, Either Parser.ParseError b)
@@ -288,14 +284,13 @@ contextMenuEntries controls path = do
         ) <$>
         dParseResult
 
-    (dCount, eContextMenu') <- renderEntries dInputFocused dSelection dEntryList
+    (dCount, eContextMenu') <- renderEntries dSelection dEntryList
 
   pure $ leftmost [eContextMenu, eContextMenu']
   where
     renderInputField ::
-      Dynamic t ContextMenuSelection ->
       m (Dynamic t Bool, Dynamic t Text, Event t (ContextMenuEvent a))
-    renderInputField dSelected = do
+    renderInputField = do
       (inputElement, _) <-
         Dom.elAttr' "input"
           ("type" Dom.=: "text" <> "id" Dom.=: "context-menu-input" <> "autocomplete" Dom.=: "off")
@@ -327,36 +322,10 @@ contextMenuEntries controls path = do
 
       dFocused :: Dynamic t Bool <- holdDyn True $ leftmost [False <$ eBlur, True <$ eFocus]
 
-      performEvent_ $
-        attachWithMaybe
-          (\focused selected ->
-            case selected of
-              TextInput -> Just $ HTMLElement.focus htmlInputElement
-              _
-                | focused -> Just $ HTMLElement.blur htmlInputElement
-                | otherwise -> Nothing
-          )
-          (current dFocused)
-          (updated dSelected)
-
-      let
-        eChoose =
-          case nodeType @b of
-            TIdent ->
-              attachWithMaybe
-                (\(selected, value) () ->
-                   case selected of
-                     TextInput -> Just . Choose path $ Ident (Text.unpack value)
-                     _ -> Nothing
-                )
-                ((,) <$> current dSelected <*> current dValue)
-                (cmcChoose controls)
-            _ -> never
-
-      pure (dFocused, dValue, eChoose)
+      pure (dFocused, dValue, never)
 
     renderEntry ::
-      Dynamic t ContextMenuSelection ->
+      Dynamic t MenuEntryIndex ->
       Int ->
       (Text, Either Parser.ParseError b) ->
       m ()
@@ -375,11 +344,10 @@ contextMenuEntries controls path = do
         Dom.text entryTitle
 
     renderEntries ::
-      Dynamic t Bool ->
-      Dynamic t ContextMenuSelection ->
+      Dynamic t MenuEntryIndex ->
       Dynamic t [(Text, Either Parser.ParseError b)] ->
       m (Dynamic t Int, Event t (ContextMenuEvent a))
-    renderEntries dInputFocused dSelection dEntries =
+    renderEntries dSelection dEntries =
       Dom.elAttr "div" ("id" Dom.=: "context-menu-entries") $ do
         Dom.dyn_ $ (\entries -> for_ (zip [0..] entries) (uncurry $ renderEntry dSelection)) <$> dEntries
         pure
@@ -387,14 +355,13 @@ contextMenuEntries controls path = do
           , attachWithMaybe
               (\(selection, entries) () ->
                 case selection of
-                  MenuEntry ix -> 
+                  MenuEntry ix ->
                     case snd $ entries !! ix of
                       Left{} -> Nothing
                       Right val -> Just $ Choose path val
-                  _ -> Nothing
               )
               ((,) <$> current dSelection <*> current dEntries)
-              (gate (not <$> current dInputFocused) (cmcChoose controls))
+              (cmcChoose controls)
           )
 
 syntaxHole :: DomBuilder t m => Attrs -> m ()
