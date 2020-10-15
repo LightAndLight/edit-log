@@ -7,6 +7,7 @@ module Path where
 
 import Control.Monad (guard)
 import Data.Functor.Identity (Identity(..))
+import qualified Data.List.NonEmpty as NonEmpty
 import Data.Type.Equality ((:~:)(..))
 
 import Syntax (Expr(..), Statement(..), Block(..), Ident)
@@ -233,8 +234,13 @@ traversal p f a =
         Block_Index n ->
           case a of
             Block sts | n >= 0, n < length sts ->
-              (\val -> let (prefix, suffix) = splitAt n sts in Block $ prefix ++ val : drop 1 suffix) <$>
-              traversal p' f (sts !! n)
+              (\val ->
+                 let
+                   (prefix, suffix) = splitAt n $ NonEmpty.toList sts
+                 in
+                   Block $ foldr NonEmpty.cons (val NonEmpty.:| drop 1 suffix) prefix
+              ) <$>
+              traversal p' f (NonEmpty.toList sts !! n)
             _ -> pure a
 
 modify :: Path a b -> (b -> b) -> a -> a

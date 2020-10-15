@@ -12,6 +12,7 @@ where
 import Control.Applicative ((<|>))
 import Data.Functor.Identity (Identity(..))
 import Data.Monoid (Alt(..))
+import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
 import Node (Node(..))
@@ -63,7 +64,7 @@ findNextHole v = go
           getAlt $
           foldMap
             (\(ix, st) -> Alt $ go (Path.snoc path $ Block_Index ix) st)
-            (zip [0..] sts)
+            (zip [0..] $ NonEmpty.toList sts)
         NIdent{} -> Nothing
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
@@ -178,7 +179,7 @@ nextHole v focusPath = do
                   case node of
                     NBlock sts ->
                       let
-                        (_, suffix) = splitAt ix $ zip [0..] sts
+                        (_, suffix) = splitAt ix . zip [0..] $ NonEmpty.toList sts
                       in
                         case suffix of
                           (_, st) : rest ->
@@ -222,7 +223,7 @@ findPrevHole v = go
           getAlt $
           foldMap
             (\(ix, st) -> Alt $ go (Path.snoc path $ Block_Index ix) st)
-            (reverse $ zip [0..] sts)
+            (reverse . zip [0..] $ NonEmpty.toList sts)
         NIdent{} -> Nothing
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
@@ -336,7 +337,7 @@ prevHole v focusPath = do
                   case node of
                     NBlock sts ->
                       let
-                        (prefix, suffix) = splitAt ix $ zip [0..] sts
+                        (prefix, suffix) = splitAt ix . zip [0..] $ NonEmpty.toList sts
                       in
                         case suffix of
                           (_, st) : _ ->

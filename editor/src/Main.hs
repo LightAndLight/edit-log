@@ -16,6 +16,7 @@ import Data.Foldable (asum, for_)
 import Data.Functor (($>))
 import Data.Functor.Identity (Identity(..))
 import qualified Data.List as List
+import qualified Data.List.NonEmpty as NonEmpty
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Maybe as Maybe
@@ -773,7 +774,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                         _ ->
                           renderNodeHash contextMenuControls controls dMenu versioned NoFocus path' st
                   )
-                  (zip [0::Int ..] sts)
+                  (zip [0::Int ..] $ NonEmpty.toList sts)
               pure
                 ( leftmost $ (\(a, _, _) -> a) <$> nodes
                 , foldMap (\(_, a, _) -> a) nodes
@@ -1290,6 +1291,6 @@ main = do
          ]
     )
     (editor
-      (Block [SHole])
+      (Block $ pure SHole)
       (Focus $ Cons (Block_Index 0) Nil)
     )

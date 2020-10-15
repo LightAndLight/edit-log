@@ -28,11 +28,11 @@ baseExprCompletions =
 
 baseStatementCompletions :: [(Text, Statement)]
 baseStatementCompletions =
-  [ ("for in", For IHole EHole $ Block [SHole])
-  , ("if", IfThen EHole $ Block [SHole])
-  , ("if else", IfThenElse EHole (Block [SHole]) (Block [SHole]))
+  [ ("for in", For IHole EHole $ Block (pure SHole))
+  , ("if", IfThen EHole $ Block (pure SHole))
+  , ("if else", IfThenElse EHole (Block $ pure SHole) (Block $ pure SHole))
   , ("print", Print EHole)
-  , ("def", Def IHole [] $ Block [SHole])
+  , ("def", Def IHole [] $ Block (pure SHole))
   ]
 
 data Found

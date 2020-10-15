@@ -3,6 +3,7 @@
 module Syntax where
 
 import Data.Hashable (Hashable)
+import Data.List.NonEmpty (NonEmpty)
 import GHC.Generics (Generic)
 
 data Ident
@@ -12,7 +13,7 @@ data Ident
 instance Hashable Ident
 
 newtype Block
-  = Block [Statement]
+  = Block (NonEmpty Statement)
   deriving Show
 
 data Statement

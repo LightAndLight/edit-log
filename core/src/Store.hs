@@ -9,6 +9,7 @@ import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
 import Control.Monad.State (StateT)
 import Data.Function (on)
 import qualified Data.List as List
+import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
 import Node (Node(..))
@@ -135,12 +136,12 @@ modifyH path_ f_ = runMaybeT . go path_ f_
             Block_Index ix -> do
               case n of
                 NBlock sts | 0 <= ix && ix < length sts -> do
-                  let (prefix, more) = List.splitAt ix sts
+                  let (prefix, more) = List.splitAt ix $ NonEmpty.toList sts
                   case more of
                     [] -> error "impossible"
                     elh : suffix -> do
                       elh' <- go rest f elh
-                      lift . addNode $ NBlock (prefix ++ elh' : suffix)
+                      lift . addNode $ NBlock (foldr NonEmpty.cons (elh' NonEmpty.:| suffix) prefix)
                 _ -> empty
 
 data SetH a b
@@ -270,12 +271,12 @@ setH path_ val_ = runMaybeT . go path_ val_
             Block_Index ix -> do
               case n of
                 NBlock sts | 0 <= ix && ix < length sts -> do
-                  let (prefix, more) = List.splitAt ix sts
+                  let (prefix, more) = List.splitAt ix $ NonEmpty.toList sts
                   case more of
                     [] -> error "impossible"
                     elh : suffix -> do
                       res <- go rest mval elh
-                      rooth' <- lift . addNode $ NBlock (prefix ++ rootHash res : suffix)
+                      rooth' <- lift . addNode $ NBlock (foldr NonEmpty.cons (rootHash res NonEmpty.:| suffix) prefix)
                       pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
@@ -323,7 +324,7 @@ insertH path positions =
         case block of
           NBlock sts -> do
             sholeHash <- addNode NSHole
-            addNode . NBlock $ insertAll sholeHash positions sts
+            addNode . NBlock $ NonEmpty.fromList (insertAll sholeHash positions $ NonEmpty.toList sts)
 
 rebuild :: MonadStore m => Hash a -> m (Maybe a)
 rebuild = runMaybeT . go
@@ -501,6 +502,6 @@ getH path h =
             Block_Index ix ->
               case node of
                 NBlock sts ->
-                  case lookup ix $ zip [0..] sts of
+                  case lookup ix . zip [0..] $ NonEmpty.toList sts of
                     Nothing -> pure Nothing
                     Just st -> getH rest st

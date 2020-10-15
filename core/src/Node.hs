@@ -8,6 +8,7 @@ import Data.Hashable (Hashable(..))
 import Data.GADT.Compare (geq)
 import Data.GADT.Compare.TH (deriveGEq)
 import Data.GADT.Show.TH (deriveGShow)
+import Data.List.NonEmpty (NonEmpty)
 import Data.Type.Equality ((:~:))
 
 import Hash (Hash(..))
@@ -27,7 +28,7 @@ data Node :: * -> * where
   NUnOp :: UnOp -> Hash Expr -> Node Expr
   NEIdent :: String -> Node Expr
 
-  NBlock :: [Hash Statement] -> Node Block
+  NBlock :: NonEmpty (Hash Statement) -> Node Block
 
   NIdent :: String -> Node Ident
 

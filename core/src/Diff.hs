@@ -19,7 +19,7 @@ import Path (Level(..), Path(..), eqLevel)
 import qualified Path
 import Store (MonadStore)
 import qualified Store
-import Syntax (Block, Statement(..))
+import Syntax (Block(..), Statement(..))
 
 data Entry a where
   Entry :: Level a b -> Diff b -> Entry a
@@ -82,7 +82,11 @@ applyChange p c h =
              Nothing ->
                pure blockHash
              Just (NBlock statementHashes) ->
-               Store.addNode $ NBlock (SequenceDiff.apply changes statementHashes)
+               case NonEmpty.nonEmpty $ SequenceDiff.apply changes (NonEmpty.toList statementHashes) of
+                 Nothing ->
+                   Store.addBlock . Block $ pure SHole
+                 Just statementHashes' ->
+                   Store.addNode $ NBlock statementHashes'
         )
         h
 

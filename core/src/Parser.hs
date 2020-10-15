@@ -98,7 +98,7 @@ simpleStatement =
 
     ifSt =
       (\cond then_ mElse_ ->
-         maybe (IfThen cond $ Block [then_]) (IfThenElse cond (Block [then_]) . Block . pure) mElse_
+         maybe (IfThen cond . Block $ pure then_) (IfThenElse cond (Block $ pure then_) . Block . pure) mElse_
       ) <$ token (string "if") <*>
       expr <* token (char ':') <*>
       simpleStatement <*>
