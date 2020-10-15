@@ -30,6 +30,8 @@ data BinOp
   | Mul
   | Div
 
+  | Eq
+
   | Or
   | And
   deriving (Eq, Generic, Show, Enum, Bounded)

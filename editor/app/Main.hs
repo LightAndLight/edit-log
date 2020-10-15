@@ -794,6 +794,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   Sub -> syntaxSymbol mempty $ Dom.text "-"
                   Mul -> syntaxSymbol mempty $ Dom.text "*"
                   Div -> syntaxSymbol mempty $ Dom.text "/"
+                  Eq -> syntaxSymbol mempty $ Dom.text "=="
                   And -> syntaxKeyword mempty $ Dom.text "and"
                   Or -> syntaxKeyword mempty $ Dom.text "or"
                 (eBinOpRight, binOpRightInfo, binOpRightFocus) <-
