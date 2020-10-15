@@ -15,9 +15,11 @@ import Control.Monad.Trans.Class (lift)
 import Data.Foldable (asum, for_)
 import Data.Functor (($>))
 import Data.Functor.Identity (Identity(..))
+import qualified Data.List as List
 import Data.Map (Map)
 import qualified Data.Map as Map
 import qualified Data.Maybe as Maybe
+import qualified Data.Ord
 import qualified Data.Set as Set
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -42,13 +44,15 @@ import NodeType (KnownNodeType, NodeType(..), nodeType)
 import qualified Parser
 import Path (Path(..), Level(..))
 import qualified Path
-import Syntax (Block(..), Statement(..), Expr(..), BinOp(..), UnOp(..), Ident(..))
+import Syntax (Block(..), Statement(..), BinOp(..), UnOp(..), Ident(..))
 import Session (Session, newSession)
 import Session.Pure (runSessionT)
 import qualified Store
 import qualified Versioned
 import Versioned.Pure (Versioned, runVersionedT, newVersioned)
 
+import Autocomplete (baseExprCompletions, baseStatementCompletions)
+import qualified Autocomplete
 import Focus (Focus(..))
 import Navigation (nextHole, prevHole)
 
@@ -181,60 +185,8 @@ data ContextMenuControls t
   , cmcPrev :: Event t ()
   }
 
-data ContextMenuEntry :: * -> * where
-  EntrySuggestion :: Either Parser.ParseError a -> ContextMenuEntry a
-  EntryTrue :: ContextMenuEntry Expr
-  EntryFalse :: ContextMenuEntry Expr
-  EntryInt :: ContextMenuEntry Expr
-  EntryAdd :: ContextMenuEntry Expr
-  EntrySubtract :: ContextMenuEntry Expr
-  EntryMultiply :: ContextMenuEntry Expr
-  EntryDivide :: ContextMenuEntry Expr
-  EntryOr :: ContextMenuEntry Expr
-  EntryAnd :: ContextMenuEntry Expr
-  EntryNot :: ContextMenuEntry Expr
-  EntryNeg :: ContextMenuEntry Expr
-
-  EntryFor :: ContextMenuEntry Statement
-  EntryIfThen :: ContextMenuEntry Statement
-  EntryIfThenElse :: ContextMenuEntry Statement
-  EntryPrint :: ContextMenuEntry Statement
-  EntryDef :: ContextMenuEntry Statement
-
-  EntryIdent :: String -> ContextMenuEntry Ident
-
-entryTitle :: forall a. KnownNodeType a => ContextMenuEntry a -> Text
-entryTitle entry =
-  case entry of
-    EntrySuggestion res ->
-      Text.pack $ case nodeType @a of
-        TBlock -> show res
-        TExpr -> show res
-        TStatement -> show res
-        TIdent -> show res
-
-    EntryTrue -> "true"
-    EntryFalse -> "false"
-    EntryInt -> "int"
-    EntryAdd -> "add"
-    EntrySubtract -> "subtract"
-    EntryMultiply -> "multiply"
-    EntryDivide -> "divide"
-    EntryOr -> "or"
-    EntryAnd -> "and"
-    EntryNot -> "not"
-    EntryNeg -> "negate"
-
-    EntryFor -> "for"
-    EntryIfThen -> "if then"
-    EntryIfThenElse -> "if then else"
-    EntryPrint -> "print"
-    EntryDef -> "function definition"
-
-    EntryIdent i -> Text.pack i
-
 data ContextMenuEvent a where
-  Choose :: KnownNodeType b => Path a b -> ContextMenuEntry b -> ContextMenuEvent a
+  Choose :: KnownNodeType b => Path a b -> b -> ContextMenuEvent a
   Next :: ContextMenuEvent a
   Prev :: ContextMenuEvent a
 
@@ -288,47 +240,51 @@ contextMenuEntries controls path = do
     (dInputFocused, dInputValue, eContextMenu) <- renderInputField dSelection
 
     let
-      dParseResult :: Dynamic t (Either Parser.ParseError b)
+      dParseResult :: Dynamic t (Text, Either Parser.ParseError b)
       dParseResult =
         (\inputValue ->
-          case nodeType @b of
-            TBlock -> Left Parser.ParseError
-            TExpr -> Parser.runParser Parser.expr $ Text.unpack inputValue
-            TStatement -> Left Parser.ParseError
-            TIdent -> Left Parser.ParseError
+          ( inputValue
+          , case nodeType @b of
+              TBlock -> Left Parser.ParseError
+              TExpr -> Parser.runParser Parser.expr $ Text.unpack inputValue
+              TStatement -> Left Parser.ParseError
+              TIdent -> Left Parser.ParseError
+          )
         ) <$>
         dInputValue
 
-      dEntryList :: Dynamic t [ContextMenuEntry b]
+      dEntryList :: Dynamic t [(Text, Either Parser.ParseError b)]
       dEntryList =
-        (\parseResult ->
+        (\(inputValue, parseResult) ->
           case nodeType @b of
             TBlock ->
-              [EntrySuggestion parseResult]
+              error "there are no suggestions for block"
             TExpr ->
-              [ EntrySuggestion parseResult
-              , EntryTrue
-              , EntryFalse
-              , EntryInt
-              , EntryAdd
-              , EntrySubtract
-              , EntryMultiply
-              , EntryDivide
-              , EntryOr
-              , EntryAnd
-              , EntryNot
-              , EntryNeg
-              ]
+              case parseResult of
+                Left{} ->
+                  fmap snd .
+                  List.sortOn (Data.Ord.Down . fst) .
+                  filter ((0 <) . fst) .
+                  fmap (\(label, val) -> (Autocomplete.similarity inputValue label, (label, Right val))) $
+                  baseExprCompletions
+                Right val ->
+                  [(inputValue, Right val)]
             TStatement ->
-              [ EntrySuggestion parseResult
-              , EntryFor
-              , EntryIfThen
-              , EntryIfThenElse
-              , EntryPrint
-              , EntryDef
-              ]
+              case parseResult of
+                Left{} ->
+                  fmap snd .
+                  List.sortOn (Data.Ord.Down . fst) .
+                  filter ((0 <) . fst) .
+                  fmap (\(label, val) -> (Autocomplete.similarity inputValue label, (label, Right val))) $
+                  baseStatementCompletions
+                Right val ->
+                  [(inputValue, Right val)]
             TIdent ->
-              [EntrySuggestion parseResult]
+              case parseResult of
+                Left{} ->
+                  []
+                Right val ->
+                  [(inputValue, Right val)]
         ) <$>
         dParseResult
 
@@ -390,7 +346,7 @@ contextMenuEntries controls path = do
               attachWithMaybe
                 (\(selected, value) () ->
                    case selected of
-                     TextInput -> Just . Choose path $ EntryIdent (Text.unpack value)
+                     TextInput -> Just . Choose path $ Ident (Text.unpack value)
                      _ -> Nothing
                 )
                 ((,) <$> current dSelected <*> current dValue)
@@ -402,9 +358,9 @@ contextMenuEntries controls path = do
     renderEntry ::
       Dynamic t ContextMenuSelection ->
       Int ->
-      ContextMenuEntry b ->
+      (Text, Either Parser.ParseError b) ->
       m ()
-    renderEntry dSelection ix entry =
+    renderEntry dSelection ix (entryTitle, _) =
       let
         dAttrs =
           (\selection ->
@@ -416,12 +372,12 @@ contextMenuEntries controls path = do
           dSelection
       in
         Dom.elDynAttr "div" dAttrs $
-        Dom.text $ entryTitle entry
+        Dom.text entryTitle
 
     renderEntries ::
       Dynamic t Bool ->
       Dynamic t ContextMenuSelection ->
-      Dynamic t [ContextMenuEntry b] ->
+      Dynamic t [(Text, Either Parser.ParseError b)] ->
       m (Dynamic t Int, Event t (ContextMenuEvent a))
     renderEntries dInputFocused dSelection dEntries =
       Dom.elAttr "div" ("id" Dom.=: "context-menu-entries") $ do
@@ -431,7 +387,10 @@ contextMenuEntries controls path = do
           , attachWithMaybe
               (\(selection, entries) () ->
                 case selection of
-                  MenuEntry ix -> Just . Choose path $ entries !! ix
+                  MenuEntry ix -> 
+                    case snd $ entries !! ix of
+                      Left{} -> Nothing
+                      Right val -> Just $ Choose path val
                   _ -> Nothing
               )
               ((,) <$> current dSelection <*> current dEntries)
@@ -1091,29 +1050,7 @@ editor initial initialFocus = do
              (\case
                ContextMenuEvent event ->
                  case event of
-                   Choose path entry ->
-                     case entry of
-                       EntrySuggestion res ->
-                         case res of
-                           Left{} -> Nothing
-                           Right a -> Just $ Replace path a
-                       EntryTrue -> Just . Replace path $ Bool True
-                       EntryFalse -> Just . Replace path $ Bool False
-                       EntryInt -> Just . Replace path $ Int 0
-                       EntryAdd -> Just . Replace path $ BinOp Add EHole EHole
-                       EntrySubtract -> Just . Replace path $ BinOp Sub EHole EHole
-                       EntryMultiply -> Just . Replace path $ BinOp Mul EHole EHole
-                       EntryDivide -> Just . Replace path $ BinOp Div EHole EHole
-                       EntryOr -> Just . Replace path $ BinOp Or EHole EHole
-                       EntryAnd -> Just . Replace path $ BinOp And EHole EHole
-                       EntryNot -> Just . Replace path $ UnOp Not EHole
-                       EntryNeg -> Just . Replace path $ UnOp Neg EHole
-                       EntryFor -> Just . Replace path $ For IHole EHole (Block [SHole])
-                       EntryIfThen -> Just . Replace path $ IfThen EHole (Block [SHole])
-                       EntryIfThenElse -> Just . Replace path $ IfThenElse EHole (Block [SHole]) (Block [SHole])
-                       EntryPrint -> Just . Replace path $ Print EHole
-                       EntryDef -> Just . Replace path $ Def IHole [Ident "x"] (Block [SHole])
-                       EntryIdent i -> Just . Replace path $ Ident i
+                   Choose path a -> Just $ Replace path a
                    _ -> Nothing
                Select path -> Just . SetFocus $ Focus path
                _ -> Nothing

@@ -17,7 +17,8 @@ library
 
 executable editor
   main-is:             Main.hs
-  other-modules:       Focus
+  other-modules:       Autocomplete
+                     , Focus
                      , Navigation
   build-depends:       base ^>=4.12.0.0
                      , edit-log-editor
