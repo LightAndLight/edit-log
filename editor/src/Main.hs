@@ -199,7 +199,7 @@ menuNext :: Int -> MenuEntryIndex -> MenuEntryIndex
 menuNext itemCount s =
   case s of
     MenuEntry n
-      | n < itemCount -> MenuEntry $ n+1
+      | n < itemCount - 1 -> MenuEntry $ n+1
       | otherwise -> MenuEntry 0
 
 menuPrev :: Int -> MenuEntryIndex -> MenuEntryIndex
@@ -937,6 +937,12 @@ data EditorState a
   , esFocus :: Focus a
   }
 
+data DocumentControls t
+  = DocumentControls
+  { dNextHole :: Event t ()
+  , dPrevHole :: Event t ()
+  }
+
 editor ::
   forall t m a.
   ( Reflex t, MonadHold t m, PostBuild t m, TriggerEvent t m
@@ -956,8 +962,8 @@ editor initial initialFocus = do
     contextMenuControls =
       ContextMenuControls
       { cmcChoose = dkEnter keys
-      , cmcNext = dkDown keys
-      , cmcPrev = dkUp keys
+      , cmcNext = leftmost [dkDown keys, dkTab keys]
+      , cmcPrev = leftmost [dkUp keys, dkShiftTab keys]
       }
 
     nodeControls =
@@ -966,8 +972,11 @@ editor initial initialFocus = do
       , ncCloseMenu = dkEscape keys
       }
 
-    eNextHole = NextHole <$ dkTab keys
-    ePrevHole = PrevHole <$ dkShiftTab keys
+    documentControls =
+      DocumentControls
+      { dNextHole = dkTab keys
+      , dPrevHole = dkShiftTab keys
+      }
 
     initialVersioned :: Versioned a
     initialVersioned = newVersioned initial
@@ -975,7 +984,13 @@ editor initial initialFocus = do
     initialSession :: Session (Time, Entry a)
     initialSession = newSession
 
+
   rec
+    let
+      dMenuClosed = (MenuClosed ==) <$> current dMenu
+      eNextHole = gate dMenuClosed (NextHole <$ dNextHole documentControls)
+      ePrevHole = gate dMenuClosed (PrevHole <$ dPrevHole documentControls)
+
     (dVersioned, _dSession, dFocus) <-
       (\d -> (esVersioned <$> d, esSession <$> d, esFocus <$> d)) <$>
       foldDyn
