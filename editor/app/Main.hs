@@ -355,8 +355,9 @@ contextMenuEntries controls path = do
           , attachWithMaybe
               (\(selection, entries) () ->
                 case selection of
-                  MenuEntry ix ->
-                    case snd $ entries !! ix of
+                  MenuEntry ix -> do
+                    res <- lookup ix $ zip [0..] entries
+                    case snd res of
                       Left{} -> Nothing
                       Right val -> Just $ Choose path val
               )
