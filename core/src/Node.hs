@@ -5,22 +5,21 @@
 module Node where
 
 import Data.Hashable (Hashable(..))
-import Data.GADT.Compare (geq)
-import Data.GADT.Compare.TH (deriveGEq)
+import Data.GADT.Compare (GEq, geq)
 import Data.GADT.Show.TH (deriveGShow)
 import Data.List.NonEmpty (NonEmpty)
-import Data.Type.Equality ((:~:))
+import Data.Type.Equality ((:~:)(..))
 
 import Hash (Hash(..))
-import NodeType (KnownNodeType)
-import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident)
+import NodeType (KnownNodeType, NodeType)
+import Syntax (Expr, List, Statement, Block, UnOp, BinOp, Ident)
 
 data Node :: * -> * where
   NFor :: Hash Ident -> Hash Expr -> Hash Block -> Node Statement
   NIfThen :: Hash Expr -> Hash Block -> Node Statement
   NIfThenElse :: Hash Expr -> Hash Block -> Hash Block -> Node Statement
   NPrint :: Hash Expr -> Node Statement
-  NDef :: Hash Ident -> [Ident] -> Hash Block -> Node Statement
+  NDef :: Hash Ident -> Hash (List Ident) -> Hash Block -> Node Statement
 
   NBool :: Bool -> Node Expr
   NInt :: Int -> Node Expr
@@ -32,11 +31,20 @@ data Node :: * -> * where
 
   NIdent :: String -> Node Ident
 
+  NList :: NodeType a -> [Hash a] -> Node (List a)
+
   NSHole :: Node Statement
   NEHole :: Node Expr
   NIHole :: Node Ident
 deriving instance Show (Node a)
-deriveGEq ''Node
+instance GEq Node where
+  geq a b =
+    case a of
+      NList nt hs ->
+        case b of
+          NList nt' hs' -> do
+            Refl <- geq nt nt'
+            if hs == hs' then Just Refl else Nothing
 deriveGShow ''Node
 
 eqNode :: Node a -> Node b -> Maybe (a :~: b)
@@ -73,6 +81,8 @@ instance Hashable (Node a) where
 
       NEIdent i -> hashWithSalt s (13::Int, i)
 
+      NList nt hs -> hashWithSalt s (14::Int, nt, hs)
+
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
   case n of
@@ -89,6 +99,8 @@ hashNode n =
     NEIdent{} -> HExpr $ hash n
 
     NBlock{} -> HBlock $ hash n
+
+    NList nt _ -> HList nt $ hash n
 
     NIdent{} -> HIdent $ hash n
 

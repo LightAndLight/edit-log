@@ -16,12 +16,15 @@ newtype Block
   = Block (NonEmpty Statement)
   deriving Show
 
+newtype List a = List [a]
+  deriving (Eq, Show, Hashable)
+
 data Statement
   = For Ident Expr Block
   | IfThen Expr Block
   | IfThenElse Expr Block Block
   | Print Expr
-  | Def Ident [Ident] Block
+  | Def Ident (List Ident) Block
   | SHole
   deriving Show
 

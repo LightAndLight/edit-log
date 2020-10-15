@@ -13,9 +13,10 @@ import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
 import Node (Node(..))
+import qualified Node
 import NodeType (KnownNodeType)
 import Path (Path(..), Level(..))
-import Syntax (Expr(..), Statement(..), Block(..), Ident(..))
+import Syntax (Expr(..), Statement(..), Block(..), Ident(..), List(..))
 
 class Monad m => MonadStore m where
   lookupNode :: Hash a -> m (Maybe (Node a))
@@ -355,7 +356,7 @@ rebuild = runMaybeT . go
             NDef name args body ->
               Def <$>
               go name <*>
-              pure args <*>
+              go args <*>
               go body
 
             NBool b -> pure $ Bool b
@@ -422,9 +423,15 @@ addStatement s =
       addNode $ NPrint valh
     Def name args body -> do
       nameh <- addIdent name
+      argsh <- addList addIdent args
       bodyh <- addBlock body
-      addNode $ NDef nameh args bodyh
+      addNode $ NDef nameh argsh bodyh
     SHole -> addNode NSHole
+
+addList :: MonadStore m => (a -> m (Hash a)) -> List a -> m (Hash (List a))
+addList addIt (List xs) = do
+  xsh <- traverse addIt xs
+  addNode $ NList $ Node.tlist xsh
 
 addBlock :: MonadStore m => Block -> m (Hash Block)
 addBlock b =
