@@ -25,6 +25,7 @@ data Node :: * -> * where
   NInt :: Int -> Node Expr
   NBinOp :: BinOp -> Hash Expr -> Hash Expr -> Node Expr
   NUnOp :: UnOp -> Hash Expr -> Node Expr
+  NEIdent :: String -> Node Expr
 
   NBlock :: [Hash Statement] -> Node Block
 
@@ -69,6 +70,8 @@ instance Hashable (Node a) where
       NIdent i -> hashWithSalt s (12::Int, i)
       NIHole -> hashWithSalt s (13::Int)
 
+      NEIdent i -> hashWithSalt s (13::Int, i)
+
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
   case n of
@@ -82,6 +85,7 @@ hashNode n =
     NInt{} -> HExpr $ hash n
     NBinOp{} -> HExpr $ hash n
     NUnOp{} -> HExpr $ hash n
+    NEIdent{} -> HExpr $ hash n
 
     NBlock{} -> HBlock $ hash n
 

@@ -57,6 +57,7 @@ expr = orOp
       token $
       bool <|>
       int <|>
+      EIdent <$> identifier <|>
       hole
 
     bool =
@@ -69,9 +70,12 @@ expr = orOp
 
     hole = EHole <$ char '?'
 
+identifier :: CharParsing m => m String
+identifier = (:) <$> lower <*> many alphaNum
+
 ident :: CharParsing m => m Ident
 ident =
-  (\h t -> Ident $ h : t) <$> lower <*> many alphaNum <|>
+  Ident <$> identifier <|>
   IHole <$ char '?'
 
 simpleStatement :: CharParsing m => m Statement

@@ -365,6 +365,8 @@ rebuild = runMaybeT . go
               go r
             NUnOp op ex ->
               UnOp op <$> go ex
+            NEIdent i ->
+              pure $ EIdent i
 
             NBlock sts ->
               Block <$> traverse go sts
@@ -394,6 +396,7 @@ addExpr e =
     UnOp op value -> do
       valueh <- addExpr value
       addNode $ NUnOp op valueh
+    EIdent i -> addNode $ NEIdent i
     EHole -> addNode NEHole
 
 addStatement :: MonadStore m => Statement -> m (Hash Statement)

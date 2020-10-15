@@ -53,6 +53,7 @@ findNextHole v = go
           go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
+        NEIdent{} -> Nothing
         NBinOp _ left right ->
           go (Path.snoc path BinOp_Left) left <|>
           go (Path.snoc path BinOp_Right) right
@@ -211,6 +212,7 @@ findPrevHole v = go
           go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
+        NEIdent{} -> Nothing
         NBinOp _ left right ->
           go (Path.snoc path BinOp_Right) right <|>
           go (Path.snoc path BinOp_Left) left

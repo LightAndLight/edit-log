@@ -434,21 +434,22 @@ instance Reflex t => Monoid (NodeInfo t) where
 isHole :: Node a -> Bool
 isHole n =
   case n of
-  NFor{} -> False
-  NIfThen{} -> False
-  NIfThenElse{} -> False
-  NPrint{} -> False
-  NDef{} -> False
-  NBool{} -> False
-  NInt{} -> False
-  NBinOp{} -> False
-  NUnOp{} -> False
-  NBlock{} -> False
-  NIdent{} -> False
+    NFor{} -> False
+    NIfThen{} -> False
+    NIfThenElse{} -> False
+    NPrint{} -> False
+    NDef{} -> False
+    NBool{} -> False
+    NInt{} -> False
+    NEIdent{} -> False
+    NBinOp{} -> False
+    NUnOp{} -> False
+    NBlock{} -> False
+    NIdent{} -> False
 
-  NSHole{} -> True
-  NEHole{} -> True
-  NIHole{} -> True
+    NSHole{} -> True
+    NEHole{} -> True
+    NIHole{} -> True
 
 renderNode ::
   forall t m a b.
@@ -495,6 +496,8 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
           (never, mempty, Nothing) <$ Dom.text "error: missing node"
         Just node ->
           case node of
+            NEIdent n ->
+              (never, mempty, Nothing) <$ Dom.text (Text.pack n)
             NIdent n ->
               (never, mempty, Nothing) <$ Dom.text (Text.pack n)
             NIHole ->
