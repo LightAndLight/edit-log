@@ -5,14 +5,15 @@
 module Node where
 
 import Data.Hashable (Hashable(..))
-import Data.GADT.Compare (GEq, geq)
+import Data.GADT.Compare (geq)
+import Data.GADT.Compare.TH (deriveGEq)
 import Data.GADT.Show.TH (deriveGShow)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Type.Equality ((:~:)(..))
 
 import Hash (Hash(..))
-import NodeType (KnownNodeType, NodeType)
-import Syntax (Expr, List, Statement, Block, UnOp, BinOp, Ident)
+import NodeType (KnownNodeType)
+import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident, Args, Params)
 
 data Node :: * -> * where
   NFor :: Hash Ident -> Hash Expr -> Hash Block -> Node Statement
@@ -20,144 +21,27 @@ data Node :: * -> * where
   NIfThenElse :: Hash Expr -> Hash Block -> Hash Block -> Node Statement
   NPrint :: Hash Expr -> Node Statement
   NReturn :: Hash Expr -> Node Statement
-  NDef :: Hash Ident -> Hash (List Ident) -> Hash Block -> Node Statement
+  NDef :: Hash Ident -> Hash Params -> Hash Block -> Node Statement
 
   NBool :: Bool -> Node Expr
   NInt :: Int -> Node Expr
   NBinOp :: BinOp -> Hash Expr -> Hash Expr -> Node Expr
   NUnOp :: UnOp -> Hash Expr -> Node Expr
-  NCall :: Hash Expr -> Hash (List Expr) -> Node Expr
+  NCall :: Hash Expr -> Hash Args -> Node Expr
   NEIdent :: String -> Node Expr
 
   NBlock :: NonEmpty (Hash Statement) -> Node Block
 
   NIdent :: String -> Node Ident
 
-  NList :: NodeType a -> [Hash a] -> Node (List a)
+  NArgs :: [Hash Expr] -> Node Args
+  NParams :: [Hash Ident] -> Node Params
 
   NSHole :: Node Statement
   NEHole :: Node Expr
   NIHole :: Node Ident
 deriving instance Show (Node a)
-instance GEq Node where
-  geq a b =
-    case a of
-      NList nt hs ->
-        case b of
-          NList nt' hs' -> do
-            Refl <- geq nt nt'
-            if hs == hs' then Just Refl else Nothing
-          _ -> Nothing
-      NFor ha hb hc ->
-        case b of
-          NFor ha' hb' hc' -> do
-            Refl <- geq ha ha'
-            Refl <- geq hb hb'
-            Refl <- geq hc hc'
-            pure Refl
-          _ -> Nothing
-      NIfThen ha hb ->
-        case b of
-          NIfThen ha' hb' -> do
-            Refl <- geq ha ha'
-            Refl <- geq hb hb'
-            pure Refl
-          _ -> Nothing
-      NIfThenElse ha hb hc ->
-        case b of
-          NIfThenElse ha' hb' hc' -> do
-            Refl <- geq ha ha'
-            Refl <- geq hb hb'
-            Refl <- geq hc hc'
-            pure Refl
-          _ -> Nothing
-      NPrint ha ->
-        case b of
-          NPrint ha' -> do
-            Refl <- geq ha ha'
-            pure Refl
-          _ -> Nothing
-      NReturn ha ->
-        case b of
-          NReturn ha' -> do
-            Refl <- geq ha ha'
-            pure Refl
-          _ -> Nothing
-      NDef ha hb hc ->
-        case b of
-          NDef ha' hb' hc' -> do
-            Refl <- geq ha ha'
-            Refl <- geq hb hb'
-            Refl <- geq hc hc'
-            pure Refl
-          _ -> Nothing
-      NBool x ->
-        case b of
-          NBool x' -> if x == x' then pure Refl else Nothing
-          _ -> Nothing
-      NInt x ->
-        case b of
-          NInt x' -> if x == x' then pure Refl else Nothing
-          _ -> Nothing
-      NBinOp op ha hb ->
-        case b of
-          NBinOp op' ha' hb' ->
-            if op == op'
-            then do
-              Refl <- geq ha ha'
-              Refl <- geq hb hb'
-              pure Refl
-            else Nothing
-          _ -> Nothing
-      NUnOp op ha ->
-        case b of
-          NUnOp op' ha' ->
-            if op == op'
-            then do
-              Refl <- geq ha ha'
-              pure Refl
-            else Nothing
-          _ -> Nothing
-      NCall hfunc hargs ->
-        case b of
-          NCall hfunc' hargs' -> do
-            Refl <- geq hfunc hfunc'
-            Refl <- geq hargs hargs'
-            pure Refl
-          _ -> Nothing
-      NEIdent x ->
-        case b of
-          NEIdent x' ->
-            if x == x'
-            then pure Refl
-            else Nothing
-          _ -> Nothing
-      NBlock xs ->
-        case b of
-          NBlock xs' ->
-            if xs == xs'
-            then pure Refl
-            else Nothing
-          _ -> Nothing
-      NIdent x ->
-        case b of
-          NIdent x' ->
-            if x == x'
-            then pure Refl
-            else Nothing
-          _ -> Nothing
-      NSHole ->
-        case b of
-          NSHole -> pure Refl
-          _ -> Nothing
-      NEHole ->
-        case b of
-          NEHole -> pure Refl
-          _ -> Nothing
-      NIHole ->
-        case b of
-          NIHole -> pure Refl
-          _ -> Nothing
+deriveGEq ''Node
 deriveGShow ''Node
 
 eqNode :: Node a -> Node b -> Maybe (a :~: b)
@@ -187,9 +71,10 @@ instance Hashable (Node a) where
       NIdent i -> hashWithSalt s (12::Int, i)
       NIHole -> hashWithSalt s (13::Int)
       NEIdent i -> hashWithSalt s (13::Int, i)
-      NList nt hs -> hashWithSalt s (14::Int, nt, hs)
-      NReturn e -> hashWithSalt s (15::Int, e)
-      NCall func args -> hashWithSalt s (16::Int, func, args)
+      NArgs hs -> hashWithSalt s (14::Int, hs)
+      NParams hs -> hashWithSalt s (15::Int, hs)
+      NReturn e -> hashWithSalt s (16::Int, e)
+      NCall func args -> hashWithSalt s (17::Int, func, args)
 
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
@@ -210,7 +95,8 @@ hashNode n =
 
     NBlock{} -> HBlock $ hash n
 
-    NList nt _ -> HList nt $ hash n
+    NArgs{} -> HArgs $ hash n
+    NParams{} -> HParams $ hash n
 
     NIdent{} -> HIdent $ hash n
 

@@ -17,14 +17,15 @@ import Data.GADT.Show.TH (deriveGShow)
 import Data.Type.Equality ((:~:))
 
 import NodeType (NodeType(..))
-import Syntax (Block, Expr, Ident, List, Statement)
+import Syntax (Block, Expr, Ident, Statement, Args, Params)
 
 data Hash :: * -> * where
   HExpr :: Int -> Hash Expr
   HStatement :: Int -> Hash Statement
   HBlock :: Int -> Hash Block
   HIdent :: Int -> Hash Ident
-  HList :: NodeType a -> Int -> Hash (List a)
+  HArgs :: Int -> Hash Args
+  HParams :: Int -> Hash Params
 deriveGShow ''Hash
 deriveGEq ''Hash
 deriving instance Show (Hash a)
@@ -42,7 +43,8 @@ mkHash nt h =
     TStatement -> HStatement h
     TBlock -> HBlock h
     TIdent -> HIdent h
-    TList t -> HList t h
+    TArgs -> HArgs h
+    TParams -> HParams h
 
 unHash :: Hash a -> Int
 unHash h =
@@ -51,4 +53,5 @@ unHash h =
     HStatement n -> n
     HBlock n -> n
     HIdent n -> n
-    HList _ n -> n
+    HArgs n -> n
+    HParams n -> n

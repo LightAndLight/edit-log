@@ -1,4 +1,5 @@
 {-# language GADTs, KindSignatures #-}
+{-# language LambdaCase #-}
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
 {-# language StandaloneDeriving #-}
@@ -11,9 +12,9 @@ import Data.Functor.Identity (Identity(..))
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Type.Equality ((:~:)(..))
 
-import NodeType (KnownNodeType, NodeType(..), nodeType)
+import NodeType (KnownNodeType, nodeType)
 import qualified NodeType
-import Syntax (Expr(..), Statement(..), Block(..), Ident, List(..))
+import Syntax (Expr(..), Statement(..), Block(..), Ident, Args(..), Params(..))
 
 data Path a :: * -> * where
   Nil :: Path a a
@@ -63,7 +64,7 @@ data Level :: * -> * -> * where
   Return_Value :: Level Statement Expr
 
   Def_Name :: Level Statement Ident
-  Def_Args :: Level Statement (List Ident)
+  Def_Args :: Level Statement Params
   Def_Body :: Level Statement Block
 
   BinOp_Left :: Level Expr Expr
@@ -72,11 +73,12 @@ data Level :: * -> * -> * where
   UnOp_Value :: Level Expr Expr
 
   Call_Function :: Level Expr Expr
-  Call_Args :: Level Expr (List Expr)
+  Call_Args :: Level Expr Args
 
   Block_Index :: Int -> Level Block Statement
 
-  List_Index :: Int -> Level (List a) a
+  Args_Index :: Int -> Level Args Expr
+  Params_Index :: Int -> Level Params Ident
 deriving instance Show (Level a b)
 
 eqLevel :: Level a b -> Level a c -> Maybe (b :~: c)
@@ -160,9 +162,15 @@ eqLevel l1 l2 =
           guard $ n == n'
           pure Refl
         _ -> Nothing
-    List_Index n ->
+    Args_Index n ->
       case l2 of
-        List_Index n' -> do
+        Args_Index n' -> do
+          guard $ n == n'
+          pure Refl
+        _ -> Nothing
+    Params_Index n ->
+      case l2 of
+        Params_Index n' -> do
           guard $ n == n'
           pure Refl
         _ -> Nothing
@@ -302,17 +310,30 @@ traversal p f a =
               traversal p' f (NonEmpty.toList sts !! n)
             _ -> pure a
 
-        List_Index n ->
-          case a of
-            List xs | n >= 0, n < length xs ->
-              (\val ->
-                 let
-                   (prefix, suffix) = splitAt n xs
-                 in
-                   List $ prefix ++ val : drop 1 suffix
-              ) <$>
-              traversal p' f (xs !! n)
-            _ -> pure a
+        Args_Index n ->
+          traversalList (\case; Args xs -> Just xs; _ -> Nothing) Args n p' f a
+
+        Params_Index n ->
+          traversalList (\case; Params xs -> Just xs; _ -> Nothing) Params n p' f a
+
+traversalList ::
+  (a -> Maybe [b]) ->
+  ([b] -> a) ->
+  Int ->
+  Path b c ->
+  forall f. Applicative f => (c -> f c) -> a -> f a
+traversalList match build ix path f a =
+  case match a of
+    Just xs | ix >= 0, ix < length xs ->
+      (\val ->
+         let
+           (prefix, suffix) = splitAt ix xs
+         in
+           build $ prefix ++ val : drop 1 suffix
+      ) <$>
+      traversal path f (xs !! ix)
+    _ ->
+      pure a
 
 modify :: Path a b -> (b -> b) -> a -> a
 modify p f = runIdentity . traversal p (Identity . f)
@@ -342,9 +363,8 @@ withKnownLevelTarget l k =
     Call_Function -> k
     Call_Args -> k
     Block_Index{} -> k
-    List_Index{} ->
-      case nodeType @a of
-        TList ty -> NodeType.withNodeType ty k
+    Args_Index{} -> k
+    Params_Index{} -> k
 
 showingPathTarget :: forall a b r. KnownNodeType a => Path a b -> (Show b => r) -> r
 showingPathTarget path f =

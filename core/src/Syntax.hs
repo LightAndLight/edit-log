@@ -16,8 +16,11 @@ newtype Block
   = Block (NonEmpty Statement)
   deriving Show
 
-newtype List a = List [a]
-  deriving (Eq, Show, Hashable)
+newtype Args = Args [Expr]
+  deriving Show
+
+newtype Params = Params [Ident]
+  deriving Show
 
 data Statement
   = For Ident Expr Block
@@ -25,7 +28,7 @@ data Statement
   | IfThenElse Expr Block Block
   | Print Expr
   | Return Expr
-  | Def Ident (List Ident) Block
+  | Def Ident Params Block
   | SHole
   deriving Show
 
@@ -54,7 +57,7 @@ data Expr
   | Int Int
   | BinOp BinOp Expr Expr
   | UnOp UnOp Expr
-  | Call Expr (List Expr)
+  | Call Expr Args
   | EIdent String
   | EHole
   deriving Show
