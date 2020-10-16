@@ -54,6 +54,7 @@ data Expr
   | Int Int
   | BinOp BinOp Expr Expr
   | UnOp UnOp Expr
+  | Call Expr (List Expr)
   | EIdent String
   | EHole
   deriving Show

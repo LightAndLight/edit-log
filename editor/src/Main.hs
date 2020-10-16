@@ -461,6 +461,7 @@ isHole n =
     NEIdent{} -> False
     NBinOp{} -> False
     NUnOp{} -> False
+    NCall{} -> False
     NBlock{} -> False
     NIdent{} -> False
     NList{} -> False
@@ -797,6 +798,37 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   )
                   (Path.snoc path UnOp_Value)
                   val
+            NCall func args ->
+              syntaxInline mempty $ do
+                (eCallFunc, callFuncInfo, callFuncFocus) <-
+                  renderNodeHash
+                    contextMenuControls
+                    controls
+                    dMenu
+                    versioned
+                    (case focus of
+                        Focus (Cons Call_Function focusPath) -> Focus focusPath
+                        _ -> NoFocus
+                    )
+                    (Path.snoc path Call_Function)
+                    func
+                (eCallArgs, callArgsInfo, callArgsFocus) <-
+                  renderNodeHash
+                    contextMenuControls
+                    controls
+                    dMenu
+                    versioned
+                    (case focus of
+                        Focus (Cons Call_Args focusPath) -> Focus focusPath
+                        _ -> NoFocus
+                    )
+                    (Path.snoc path Call_Args)
+                    args
+                pure
+                  ( leftmost [eCallFunc, eCallArgs]
+                  , callFuncInfo <> callArgsInfo
+                  , callFuncFocus <|> callArgsFocus
+                  )
             NBlock sts -> do
               nodes <-
                 traverse
@@ -818,7 +850,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                 )
             NList nt xs -> do
               nodes <-
-                syntaxLine mempty $ do
+                syntaxInline mempty $ do
                   syntaxLParen mempty
                   nodes <-
                     traverse

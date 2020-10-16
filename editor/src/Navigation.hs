@@ -63,6 +63,9 @@ findNextHole v = go
           go (Path.snoc path BinOp_Right) right
         NUnOp _ val ->
           go (Path.snoc path UnOp_Value) val
+        NCall func args ->
+          go (Path.snoc path Call_Function) func <|>
+          go (Path.snoc path Call_Args) args
         NBlock sts ->
           getAlt $
           foldMap
@@ -196,6 +199,17 @@ nextHole v focusPath = do
                     NUnOp _ val ->
                       searchTree (Path.snoc context UnOp_Value) path' val
                     _ -> []
+                Call_Function ->
+                  case node of
+                    NCall func args->
+                      searchTree (Path.snoc context Call_Function) path' func <>
+                      [ SearchEntry (Path.snoc context Call_Args) args ]
+                    _ -> []
+                Call_Args ->
+                  case node of
+                    NCall _ args->
+                      searchTree (Path.snoc context Call_Args) path' args
+                    _ -> []
                 Block_Index ix ->
                   case node of
                     NBlock sts ->
@@ -254,6 +268,9 @@ findPrevHole v = go
           go (Path.snoc path BinOp_Left) left
         NUnOp _ val ->
           go (Path.snoc path UnOp_Value) val
+        NCall func args ->
+          go (Path.snoc path Call_Function) func <|>
+          go (Path.snoc path Call_Args) args
         NBlock sts ->
           getAlt $
           foldMap
@@ -385,6 +402,17 @@ prevHole v focusPath = do
                   case node of
                     NUnOp _ val ->
                       searchTree (Path.snoc context UnOp_Value) path' val
+                    _ -> []
+                Call_Function ->
+                  case node of
+                    NCall func _ ->
+                      searchTree (Path.snoc context Call_Function) path' func
+                    _ -> []
+                Call_Args ->
+                  case node of
+                    NCall func args->
+                      searchTree (Path.snoc context Call_Args) path' args <>
+                      [ SearchEntry (Path.snoc context Call_Function) func ]
                     _ -> []
                 Block_Index ix ->
                   case node of

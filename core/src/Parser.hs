@@ -52,7 +52,12 @@ expr = orOp
     unOp =
       (\mOp ex -> maybe ex (`UnOp` ex) mOp) <$>
       optional (Neg <$ char '-' <|> Not <$ token (string "not")) <*>
-      atom
+      call
+
+    call =
+      (\e -> maybe e (Call e)) <$>
+      atom <*>
+      optional (between (token $ char '(') (token $ char ')') (list expr))
 
     atom =
       token $

@@ -26,6 +26,7 @@ data Node :: * -> * where
   NInt :: Int -> Node Expr
   NBinOp :: BinOp -> Hash Expr -> Hash Expr -> Node Expr
   NUnOp :: UnOp -> Hash Expr -> Node Expr
+  NCall :: Hash Expr -> Hash (List Expr) -> Node Expr
   NEIdent :: String -> Node Expr
 
   NBlock :: NonEmpty (Hash Statement) -> Node Block
@@ -117,6 +118,13 @@ instance GEq Node where
               pure Refl
             else Nothing
           _ -> Nothing
+      NCall hfunc hargs ->
+        case b of
+          NCall hfunc' hargs' -> do
+            Refl <- geq hfunc hfunc'
+            Refl <- geq hargs hargs'
+            pure Refl
+          _ -> Nothing
       NEIdent x ->
         case b of
           NEIdent x' ->
@@ -167,28 +175,21 @@ instance Hashable (Node a) where
       NFor ident ex body -> hashWithSalt s (0::Int, ident, ex, body)
       NIfThen cond then_ -> hashWithSalt s (1::Int, cond, then_)
       NIfThenElse cond then_ else_ -> hashWithSalt s (2::Int, cond, then_, else_)
-
       NBool b -> hashWithSalt s (3::Int, b)
       NInt v -> hashWithSalt s (4::Int, v)
       NBinOp op l r -> hashWithSalt s (5::Int, op, l, r)
       NUnOp op ex -> hashWithSalt s (6::Int, op, ex)
-
       NBlock sts -> hashWithSalt s (7::Int, sts)
-
       NSHole -> hashWithSalt s (8::Int)
       NEHole -> hashWithSalt s (9::Int)
-
       NPrint e -> hashWithSalt s (10::Int, e)
       NDef name args body -> hashWithSalt s (11::Int, name, args, body)
-
       NIdent i -> hashWithSalt s (12::Int, i)
       NIHole -> hashWithSalt s (13::Int)
-
       NEIdent i -> hashWithSalt s (13::Int, i)
-
       NList nt hs -> hashWithSalt s (14::Int, nt, hs)
-
       NReturn e -> hashWithSalt s (15::Int, e)
+      NCall func args -> hashWithSalt s (16::Int, func, args)
 
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
@@ -204,6 +205,7 @@ hashNode n =
     NInt{} -> HExpr $ hash n
     NBinOp{} -> HExpr $ hash n
     NUnOp{} -> HExpr $ hash n
+    NCall{} -> HExpr $ hash n
     NEIdent{} -> HExpr $ hash n
 
     NBlock{} -> HBlock $ hash n

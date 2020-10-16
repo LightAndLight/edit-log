@@ -147,6 +147,19 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                   lift . addNode $ NUnOp op valueh'
                 _ -> empty
 
+            Call_Function -> do
+              case n of
+                NCall funch argsh -> do
+                  funch' <- go rest f funch
+                  lift . addNode $ NCall funch' argsh
+                _ -> empty
+            Call_Args -> do
+              case n of
+                NCall funch argsh -> do
+                  argsh' <- go rest f argsh
+                  lift . addNode $ NCall funch argsh'
+                _ -> empty
+
             Block_Index ix -> do
               case n of
                 NBlock sts | 0 <= ix && ix < length sts -> do
@@ -308,6 +321,21 @@ setH path_ val_ = runMaybeT . go path_ val_
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
+            Call_Function -> do
+              case n of
+                NCall funch argsh -> do
+                  res <- go rest mval funch
+                  rooth' <- lift . addNode $ NCall (rootHash res) argsh
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
+            Call_Args -> do
+              case n of
+                NCall funch argsh -> do
+                  res <- go rest mval argsh
+                  rooth' <- lift . addNode $ NCall funch (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
+
             Block_Index ix -> do
               case n of
                 NBlock sts | 0 <= ix && ix < length sts -> do
@@ -420,6 +448,8 @@ rebuild = runMaybeT . go
               go r
             NUnOp op ex ->
               UnOp op <$> go ex
+            NCall func args ->
+              Call <$> go func <*> go args
             NEIdent i ->
               pure $ EIdent i
 
@@ -453,6 +483,10 @@ addExpr e =
     UnOp op value -> do
       valueh <- addExpr value
       addNode $ NUnOp op valueh
+    Call func args -> do
+      funch <- addExpr func
+      argsh <- addList addExpr args
+      addNode $ NCall funch argsh
     EIdent i -> addNode $ NEIdent i
     EHole -> addNode NEHole
 
@@ -580,6 +614,14 @@ getH path h =
             UnOp_Value ->
               case node of
                 NUnOp _ val -> getH rest val
+                _ -> pure Nothing
+            Call_Function ->
+              case node of
+                NCall func _ -> getH rest func
+                _ -> pure Nothing
+            Call_Args ->
+              case node of
+                NCall _ args -> getH rest args
                 _ -> pure Nothing
             Block_Index ix ->
               case node of

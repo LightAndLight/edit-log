@@ -71,6 +71,9 @@ data Level :: * -> * -> * where
 
   UnOp_Value :: Level Expr Expr
 
+  Call_Function :: Level Expr Expr
+  Call_Args :: Level Expr (List Expr)
+
   Block_Index :: Int -> Level Block Statement
 
   List_Index :: Int -> Level (List a) a
@@ -142,6 +145,14 @@ eqLevel l1 l2 =
     UnOp_Value ->
       case l2 of
         UnOp_Value -> Just Refl
+        _ -> Nothing
+    Call_Function ->
+      case l2 of
+        Call_Function -> Just Refl
+        _ -> Nothing
+    Call_Args ->
+      case l2 of
+        Call_Args -> Just Refl
         _ -> Nothing
     Block_Index n ->
       case l2 of
@@ -266,6 +277,19 @@ traversal p f a =
               traversal p' f value
             _ -> pure a
 
+        Call_Function ->
+          case a of
+            Call func args ->
+              (\func' -> Call func' args) <$>
+              traversal p' f func
+            _ -> pure a
+        Call_Args ->
+          case a of
+            Call func args ->
+              (\args' -> Call func args') <$>
+              traversal p' f args
+            _ -> pure a
+
         Block_Index n ->
           case a of
             Block sts | n >= 0, n < length sts ->
@@ -315,6 +339,8 @@ withKnownLevelTarget l k =
     BinOp_Left -> k
     BinOp_Right -> k
     UnOp_Value -> k
+    Call_Function -> k
+    Call_Args -> k
     Block_Index{} -> k
     List_Index{} ->
       case nodeType @a of
