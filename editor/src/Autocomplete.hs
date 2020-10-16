@@ -31,9 +31,9 @@ baseStatementCompletions =
   [ ("for in", For IHole EHole $ Block (pure SHole))
   , ("if", IfThen EHole $ Block (pure SHole))
   , ("if else", IfThenElse EHole (Block $ pure SHole) (Block $ pure SHole))
-  , ("print", Print EHole)
+  , ("print: ?", Print EHole)
   , ("def", Def IHole (List []) $ Block (pure SHole))
-  , ("return", Return EHole)
+  , ("return: ?", Return EHole)
   ]
 
 data Found
