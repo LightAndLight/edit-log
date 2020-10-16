@@ -1,6 +1,6 @@
 let
   reflex-platform = import ./reflex-platform {};
-  pkgs = reflex-platform.nixpkgs; 
+  pkgs = reflex-platform.nixpkgs;
   app = (import ./. {}).ghcjs.edit-log-editor;
 
   html =
