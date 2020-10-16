@@ -27,6 +27,8 @@ genHashOf ty = do
     TBlock -> HBlock n
     TExpr -> HExpr n
     TStatement -> HStatement n
+    TIdent -> HIdent n
+    TList nt -> HList nt n
 
 genHash :: Gen (Some Hash)
 genHash = do

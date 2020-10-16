@@ -18,13 +18,13 @@ import Control.Monad.State (StateT, runStateT, gets, modify)
 import Data.Functor.Identity (Identity(..))
 
 import Hash (Hash)
-import NodeType (KnownNodeType, NodeType(..), nodeType)
+import NodeType (KnownNodeType)
 import Versioned (MonadVersioned(..))
 import Log (MonadLog, Time, Entry(..), append, getEntries, getPhysicalTime)
 import Log.Pure (LogT, runLogT, Log, newLog)
 import Path (Path(..))
 import qualified Path
-import Store (MonadStore, addExpr, addStatement, addBlock, addIdent, rebuild)
+import Store (MonadStore, addStatement, rebuild)
 import qualified Store
 import Store.Pure (StoreT, runStoreT, Store, newStore)
 import Syntax (Statement, Block)
@@ -53,7 +53,7 @@ data DebugEntry a where
   DebugDelete :: Path a Block -> Int -> Statement -> DebugEntry a
 deriving instance Show (DebugEntry a)
 
-debugLog :: Show a => Versioned a -> [(Time, DebugEntry a)]
+debugLog :: KnownNodeType a => Versioned a -> [(Time, DebugEntry a)]
 debugLog (Versioned s l _) = (fmap.fmap) f entries
   where
     f entry =
@@ -87,12 +87,7 @@ newVersioned :: forall a. KnownNodeType a => a -> Versioned a
 newVersioned a = Versioned store newLog ctx
   where
     Identity (initialh, store) =
-      runStoreT newStore $ do
-        case nodeType @a of
-          TExpr -> addExpr a
-          TStatement -> addStatement a
-          TBlock -> addBlock a
-          TIdent -> addIdent a
+      runStoreT newStore $ Store.addKnownNode a
     ctx = Context { initial = a, root = initialh }
 
 instance Monad m => MonadVersioned a (VersionedT a m) where
@@ -104,12 +99,7 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
     m_res <-
       Store.setH
         path
-        (case nodeType @b of
-           TExpr -> addExpr value
-           TStatement -> addStatement value
-           TBlock -> addBlock value
-           TIdent -> addIdent value
-        )
+        (Store.addKnownNode @b value)
         rooth
     case m_res of
       Nothing -> pure Nothing

@@ -42,6 +42,7 @@ import Hash (Hash)
 import Log (Entry, Time)
 import Node (Node(..))
 import NodeType (KnownNodeType, NodeType(..), nodeType)
+import qualified NodeType
 import qualified Parser
 import Path (Path(..), Level(..))
 import qualified Path
@@ -210,6 +211,15 @@ menuPrev itemCount s =
       then MenuEntry $ itemCount - 1
       else MenuEntry $ n-1
 
+selectParser :: forall a. KnownNodeType a => Parser.Parser a
+selectParser =
+  case nodeType @a of
+    TBlock -> error "no parser for block"
+    TExpr -> Parser.expr
+    TStatement -> Parser.simpleStatement
+    TIdent -> Parser.ident
+    TList (ty :: NodeType b) -> Parser.list (NodeType.withNodeType ty (selectParser @b))
+
 contextMenuEntries ::
   forall t m a b.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
@@ -241,11 +251,7 @@ contextMenuEntries controls path = do
       dParseResult =
         (\inputValue ->
           ( inputValue
-          , case nodeType @b of
-              TBlock -> Left Parser.ParseError
-              TExpr -> Parser.runParser Parser.expr $ Text.unpack inputValue
-              TStatement -> Parser.runParser Parser.simpleStatement $ Text.unpack inputValue
-              TIdent -> Parser.runParser Parser.ident $ Text.unpack inputValue
+          , Parser.runParser (selectParser @b) $ Text.unpack inputValue
           )
         ) <$>
         dInputValue
@@ -277,6 +283,12 @@ contextMenuEntries controls path = do
                 Right val ->
                   [(inputValue, Right val)]
             TIdent ->
+              case parseResult of
+                Left{} ->
+                  []
+                Right val ->
+                  [(inputValue, Right val)]
+            TList{} ->
               case parseResult of
                 Left{} ->
                   []
@@ -418,6 +430,9 @@ syntaxRParen attrs = syntaxSymbol ("class" =: "syntax-paren" <> attrs) $ Dom.tex
 syntaxColon :: DomBuilder t m => Attrs -> m ()
 syntaxColon attrs = syntaxSymbol ("class" =: "syntax-colon" <> attrs) $ Dom.text ":"
 
+syntaxComma :: DomBuilder t m => Attrs -> m ()
+syntaxComma attrs = syntaxSymbol ("class" =: "syntax-comma" <> attrs) $ Dom.text ","
+
 syntaxNested :: DomBuilder t m => Attrs -> m a -> m a
 syntaxNested attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-nested" <> attrs
 
@@ -447,6 +462,7 @@ isHole n =
     NUnOp{} -> False
     NBlock{} -> False
     NIdent{} -> False
+    NList{} -> False
 
     NSHole{} -> True
     NEHole{} -> True
@@ -487,6 +503,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
             TBlock -> "class" =: "syntax-block"
             TStatement -> "class" =: "syntax-statement"
             TIdent -> "class" =: "syntax-ident"
+            TList{} -> "class" =: "syntax-list"
       ) <>
       fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
       if inFocus then pure ("class" =: "syntax-focused") else mempty
@@ -656,7 +673,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   (Path.snoc path Print_Value)
                   val
             NDef name args body -> do
-              (eDefName, defNameInfo, defNameFocus) <-
+              ((eDefName, defNameInfo, defNameFocus), (eDefArgs, defArgsInfo, defArgsFocus)) <-
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "def"
                   defName <-
@@ -671,17 +688,20 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                       )
                       (Path.snoc path Def_Name)
                       name
-                  syntaxLParen mempty
-                  case args of
-                    [] -> pure ()
-                    a : as -> do
-                      renderIdent a
-                      for_ as $ \x -> do
-                        syntaxSymbol mempty $ Dom.text ","
-                        renderIdent x
-                  syntaxRParen mempty
+                  defArgs <-
+                    renderNodeHash
+                      contextMenuControls
+                      controls
+                      dMenu
+                      versioned
+                      (case focus of
+                          Focus (Cons Def_Args focusPath) -> Focus focusPath
+                          _ -> NoFocus
+                      )
+                      (Path.snoc path Def_Args)
+                      args
                   syntaxColon mempty
-                  pure defName
+                  pure (defName, defArgs)
               (eDefBody, defBodyInfo, defBodyFocus) <-
                 syntaxNested mempty $
                 renderNodeHash
@@ -696,9 +716,9 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                   (Path.snoc path Def_Body)
                   body
               pure
-                ( leftmost [eDefName, eDefBody]
-                , defNameInfo <> defBodyInfo
-                , defNameFocus <|> defBodyFocus
+                ( leftmost [eDefName, eDefArgs, eDefBody]
+                , defNameInfo <> defArgsInfo <> defBodyInfo
+                , defNameFocus <|> defArgsFocus <|> defBodyFocus
                 )
             NBool b ->
               ((never, mempty, Nothing) <$) . syntaxLiteral mempty . Dom.text $
@@ -775,6 +795,36 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                           renderNodeHash contextMenuControls controls dMenu versioned NoFocus path' st
                   )
                   (zip [0::Int ..] $ NonEmpty.toList sts)
+              pure
+                ( leftmost $ (\(a, _, _) -> a) <$> nodes
+                , foldMap (\(_, a, _) -> a) nodes
+                , asum $ (\(_, _, a) -> a) <$> nodes
+                )
+            NList nt xs -> do
+              nodes <-
+                syntaxLine mempty $ do
+                  syntaxLParen mempty
+                  nodes <-
+                    traverse
+                      (\item ->
+                        case item of
+                          Nothing ->
+                            (never, mempty, Nothing) <$ syntaxComma mempty
+                          Just (ix, x) ->
+                            let
+                              path' = Path.snoc path (List_Index ix)
+                            in
+                              case focus of
+                                Focus (Cons (List_Index ix') focus') | ix == ix' ->
+                                  NodeType.withNodeType nt
+                                    (renderNodeHash contextMenuControls controls dMenu versioned (Focus focus') path' x)
+                                _ ->
+                                  NodeType.withNodeType nt
+                                    (renderNodeHash contextMenuControls controls dMenu versioned NoFocus path' x)
+                      )
+                      (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
+                  syntaxRParen mempty
+                  pure nodes
               pure
                 ( leftmost $ (\(a, _, _) -> a) <$> nodes
                 , foldMap (\(_, a, _) -> a) nodes
@@ -1178,6 +1228,14 @@ main = do
          , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
          , "}"
          , ""
+         , ".syntax-focused.syntax-list {"
+         , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
+         , "}"
+         , ""
+         , ".syntax-hovered.syntax-list {"
+         , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
+         , "}"
+         , ""
          , ".syntax-focused.syntax-ident {"
          , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
          , "}"
@@ -1242,6 +1300,10 @@ main = do
          , "}"
          , ""
          , ".syntax-node + .syntax-symbol.syntax-colon {"
+         , "  margin-left: 0em;"
+         , "}"
+         , ""
+         , ".syntax-node + .syntax-symbol.syntax-comma {"
          , "  margin-left: 0em;"
          , "}"
          , ""

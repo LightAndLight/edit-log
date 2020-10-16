@@ -9,7 +9,7 @@ where
 import Data.Text (Text)
 import qualified Data.Text as Text
 
-import Syntax (Block(..), Expr(..), Ident(..), Statement(..), UnOp(..), BinOp(..))
+import Syntax (Block(..), Expr(..), Ident(..), Statement(..), UnOp(..), BinOp(..), List(..))
 
 baseExprCompletions :: [(Text, Expr)]
 baseExprCompletions =
@@ -32,7 +32,7 @@ baseStatementCompletions =
   , ("if", IfThen EHole $ Block (pure SHole))
   , ("if else", IfThenElse EHole (Block $ pure SHole) (Block $ pure SHole))
   , ("print", Print EHole)
-  , ("def", Def IHole [] $ Block (pure SHole))
+  , ("def", Def IHole (List []) $ Block (pure SHole))
   ]
 
 data Found

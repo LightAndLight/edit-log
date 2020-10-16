@@ -1,5 +1,6 @@
 {-# language GADTs, KindSignatures #-}
 {-# language StandaloneDeriving #-}
+{-# language RankNTypes #-}
 {-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
 module NodeType where
@@ -39,3 +40,22 @@ instance KnownNodeType Expr where; nodeType = TExpr
 instance KnownNodeType Statement where; nodeType = TStatement
 instance KnownNodeType Block where; nodeType = TBlock
 instance KnownNodeType Ident where; nodeType = TIdent
+instance KnownNodeType a => KnownNodeType (List a) where; nodeType = TList nodeType
+
+withNodeType :: NodeType a -> (KnownNodeType a => r) -> r
+withNodeType n k =
+  case n of
+    TExpr -> k
+    TStatement -> k
+    TBlock -> k
+    TIdent -> k
+    TList n' -> withNodeType n' k
+
+showingNodeType :: NodeType a -> (Show a => r) -> r
+showingNodeType nt k =
+  case nt of
+    TExpr -> k
+    TStatement -> k
+    TBlock -> k
+    TIdent -> k
+    TList nt' -> showingNodeType nt' k

@@ -5,6 +5,7 @@ module Parser
   , expr
   , ident
   , simpleStatement
+  , list
   )
 where
 
@@ -13,7 +14,7 @@ import Text.Parser.Combinators (between, eof, sepBy)
 import Text.Parser.Char (CharParsing, alphaNum, char, digit, lower, string, spaces)
 import Text.ParserCombinators.ReadP (ReadP, readP_to_S)
 
-import Syntax (Block(..), Expr(..), Ident(..), Statement(..), BinOp(..), UnOp(..))
+import Syntax (Block(..), Expr(..), Ident(..), List(..), Statement(..), BinOp(..), UnOp(..))
 
 type Parser = ReadP
 
@@ -107,5 +108,11 @@ simpleStatement =
     defSt =
       (\n args -> Def n args . Block . pure) <$ token (string "def") <*>
       token ident <*>
-      between (token $ char '(') (token $ char ')') (ident `sepBy` token (char ',')) <* token (char ':') <*>
+      between
+        (token $ char '(')
+        (token $ char ')')
+        (list ident) <* token (char ':') <*>
       simpleStatement
+
+list :: CharParsing m => m a -> m (List a)
+list ma = (fmap List $ ma `sepBy` token (char ','))

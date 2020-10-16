@@ -49,8 +49,9 @@ findNextHole v = go
           go (Path.snoc path IfThenElse_Else) else_
         NPrint val ->
           go (Path.snoc path Print_Value) val
-        NDef name _ body ->
+        NDef name args body ->
           go (Path.snoc path Def_Name) name <|>
+          go (Path.snoc path Def_Args) args <|>
           go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
@@ -69,6 +70,11 @@ findNextHole v = go
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
         NIHole -> Just $ Focus path
+        NList _ xs ->
+          getAlt $
+          foldMap
+            (\(ix, st) -> Alt $ go (Path.snoc path $ List_Index ix) st)
+            (zip [0..] xs)
 
 nextHole :: forall a b. Versioned a -> Path a b -> Maybe (Focus a)
 nextHole v focusPath = do
@@ -150,8 +156,16 @@ nextHole v focusPath = do
                     _ -> []
                 Def_Name ->
                   case node of
-                    NDef name _ body ->
+                    NDef name args body ->
                       searchTree (Path.snoc context Def_Name) path' name <>
+                      [ SearchEntry (Path.snoc context Def_Args) args
+                      , SearchEntry (Path.snoc context Def_Body) body
+                      ]
+                    _ -> []
+                Def_Args ->
+                  case node of
+                    NDef _ args body ->
+                      searchTree (Path.snoc context Def_Args) path' args <>
                       [ SearchEntry (Path.snoc context Def_Body) body ]
                     _ -> []
                 Def_Body ->
@@ -186,6 +200,17 @@ nextHole v focusPath = do
                             searchTree (Path.snoc context $ Block_Index ix) path' st <>
                             fmap (\(ix', st') -> SearchEntry (Path.snoc context $ Block_Index ix') st') rest
                           [] -> []
+                List_Index ix ->
+                  case node of
+                    NList _ xs ->
+                      let
+                        (_, suffix) = splitAt ix $ zip [0..] xs
+                      in
+                        case suffix of
+                          (_, x) : rest ->
+                            searchTree (Path.snoc context $ List_Index ix) path' x <>
+                            fmap (\(ix', x') -> SearchEntry (Path.snoc context $ List_Index ix') x') rest
+                          [] -> []
 
 findPrevHole :: Versioned a -> Path x y -> Hash y -> Maybe (Focus x)
 findPrevHole v = go
@@ -208,8 +233,9 @@ findPrevHole v = go
           go (Path.snoc path IfThenElse_Cond) cond
         NPrint val ->
           go (Path.snoc path Print_Value) val
-        NDef name _ body ->
+        NDef name args body ->
           go (Path.snoc path Def_Name) name <|>
+          go (Path.snoc path Def_Args) args <|>
           go (Path.snoc path Def_Body) body
         NBool{} -> Nothing
         NInt{} -> Nothing
@@ -224,6 +250,11 @@ findPrevHole v = go
           foldMap
             (\(ix, st) -> Alt $ go (Path.snoc path $ Block_Index ix) st)
             (reverse . zip [0..] $ NonEmpty.toList sts)
+        NList _ xs ->
+          getAlt $
+          foldMap
+            (\(ix, x) -> Alt $ go (Path.snoc path $ List_Index ix) x)
+            (reverse $ zip [0..] xs)
         NIdent{} -> Nothing
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
@@ -311,11 +342,19 @@ prevHole v focusPath = do
                     NDef name _ _ ->
                       searchTree (Path.snoc context Def_Name) path' name
                     _ -> []
+                Def_Args ->
+                  case node of
+                    NDef name args _ ->
+                      searchTree (Path.snoc context Def_Args) path' args <>
+                      [ SearchEntry (Path.snoc context Def_Name) name ]
+                    _ -> []
                 Def_Body ->
                   case node of
-                    NDef name _ body ->
+                    NDef name args body ->
                       searchTree (Path.snoc context Def_Body) path' body <>
-                      [ SearchEntry (Path.snoc context Def_Name) name ]
+                      [ SearchEntry (Path.snoc context Def_Args) args
+                      , SearchEntry (Path.snoc context Def_Name) name
+                      ]
                     _ -> []
                 BinOp_Left ->
                   case node of
@@ -343,4 +382,15 @@ prevHole v focusPath = do
                           (_, st) : _ ->
                             searchTree (Path.snoc context $ Block_Index ix) path' st <>
                             fmap (\(ix', st') -> SearchEntry (Path.snoc context $ Block_Index ix') st') prefix
+                          [] -> []
+                List_Index ix ->
+                  case node of
+                    NList _ xs ->
+                      let
+                        (prefix, suffix) = splitAt ix $ zip [0..] xs
+                      in
+                        case suffix of
+                          (_, x) : _ ->
+                            searchTree (Path.snoc context $ List_Index ix) path' x <>
+                            fmap (\(ix', x') -> SearchEntry (Path.snoc context $ List_Index ix') x') prefix
                           [] -> []

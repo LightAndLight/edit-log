@@ -1,6 +1,6 @@
 {-# language GADTs #-}
 {-# language InstanceSigs, DefaultSignatures #-}
-{-# language ScopedTypeVariables #-}
+{-# language ScopedTypeVariables, TypeApplications #-}
 module Store where
 
 import Control.Applicative (empty)
@@ -13,8 +13,8 @@ import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
 import Node (Node(..))
-import qualified Node
-import NodeType (KnownNodeType)
+import NodeType (KnownNodeType, NodeType(..), nodeType)
+import qualified NodeType
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), Statement(..), Block(..), Ident(..), List(..))
 
@@ -107,6 +107,12 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                   nameh' <- go rest f nameh
                   lift . addNode $ NDef nameh' args bodyh
                 _ -> empty
+            Def_Args ->
+              case n of
+                NDef nameh argsh bodyh -> do
+                  argsh' <- go rest f argsh
+                  lift . addNode $ NDef nameh argsh' bodyh
+                _ -> empty
             Def_Body ->
               case n of
                 NDef nameh args bodyh -> do
@@ -143,6 +149,17 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                     elh : suffix -> do
                       elh' <- go rest f elh
                       lift . addNode $ NBlock (foldr NonEmpty.cons (elh' NonEmpty.:| suffix) prefix)
+                _ -> empty
+
+            List_Index ix -> do
+              case n of
+                NList nt xs | 0 <= ix && ix < length xs -> do
+                  let (prefix, more) = List.splitAt ix xs
+                  case more of
+                    [] -> error "impossible"
+                    elh : suffix -> do
+                      elh' <- go rest f elh
+                      NodeType.withNodeType nt (lift . addNode $ NList nt (prefix ++ elh' : suffix))
                 _ -> empty
 
 data SetH a b
@@ -238,6 +255,13 @@ setH path_ val_ = runMaybeT . go path_ val_
                   rooth' <- lift . addNode $ NDef (rootHash res) args bodyh
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
+            Def_Args ->
+              case n of
+                NDef nameh argsh bodyh -> do
+                  res <- go rest mval argsh
+                  rooth' <- lift . addNode $ NDef nameh (rootHash res) bodyh
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
             Def_Body ->
               case n of
                 NDef nameh args bodyh -> do
@@ -278,6 +302,18 @@ setH path_ val_ = runMaybeT . go path_ val_
                     elh : suffix -> do
                       res <- go rest mval elh
                       rooth' <- lift . addNode $ NBlock (foldr NonEmpty.cons (rootHash res NonEmpty.:| suffix) prefix)
+                      pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
+
+            List_Index ix -> do
+              case n of
+                NList nt xs | 0 <= ix && ix < length xs -> do
+                  let (prefix, more) = List.splitAt ix xs
+                  case more of
+                    [] -> error "impossible"
+                    elh : suffix -> do
+                      res <- go rest mval elh
+                      rooth' <- NodeType.withNodeType nt (lift . addNode $ NList nt (prefix ++ rootHash res : suffix))
                       pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
@@ -370,6 +406,8 @@ rebuild = runMaybeT . go
             NEIdent i ->
               pure $ EIdent i
 
+            NList _ xs -> List <$> traverse go xs
+
             NBlock sts ->
               Block <$> traverse go sts
 
@@ -428,10 +466,19 @@ addStatement s =
       addNode $ NDef nameh argsh bodyh
     SHole -> addNode NSHole
 
-addList :: MonadStore m => (a -> m (Hash a)) -> List a -> m (Hash (List a))
+addList :: (KnownNodeType a, MonadStore m) => (a -> m (Hash a)) -> List a -> m (Hash (List a))
 addList addIt (List xs) = do
   xsh <- traverse addIt xs
-  addNode $ NList $ Node.tlist xsh
+  addNode $ NList nodeType xsh
+
+addKnownNode :: forall a m. (KnownNodeType a, MonadStore m) => a -> m (Hash a)
+addKnownNode a =
+  case nodeType @a of
+    TExpr -> addExpr a
+    TStatement -> addStatement a
+    TBlock -> addBlock a
+    TIdent -> addIdent a
+    TList nt' -> NodeType.withNodeType nt' (addList addKnownNode a)
 
 addBlock :: MonadStore m => Block -> m (Hash Block)
 addBlock b =
@@ -490,6 +537,10 @@ getH path h =
               case node of
                 NDef name _ _ -> getH rest name
                 _ -> pure Nothing
+            Def_Args ->
+              case node of
+                NDef _ args _ -> getH rest args
+                _ -> pure Nothing
             Def_Body ->
               case node of
                 NDef _ _ body -> getH rest body
@@ -510,5 +561,11 @@ getH path h =
               case node of
                 NBlock sts ->
                   case lookup ix . zip [0..] $ NonEmpty.toList sts of
+                    Nothing -> pure Nothing
+                    Just st -> getH rest st
+            List_Index ix ->
+              case node of
+                NList _ xs ->
+                  case lookup ix $ zip [0..] xs of
                     Nothing -> pure Nothing
                     Just st -> getH rest st

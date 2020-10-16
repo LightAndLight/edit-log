@@ -18,12 +18,13 @@ import Gen.Syntax (genBinOp, genUnOp)
 
 import Node (Node(..))
 import NodeType (KnownNodeType, NodeType(..))
+import Syntax (Ident(..))
 
 genNodeOf :: NodeType a -> Gen (Node a)
 genNodeOf nt =
   case nt of
     TBlock ->
-      NBlock <$> Gen.list (Range.linear 1 5) (genHashOf TStatement)
+      NBlock <$> Gen.nonEmpty (Range.linear 1 5) (genHashOf TStatement)
     TExpr ->
       Gen.choice
       [ NBool <$> Gen.bool
@@ -34,11 +35,15 @@ genNodeOf nt =
       ]
     TStatement ->
       Gen.choice
-      [ NFor <$> genIdent <*> genHashOf TExpr <*> genHashOf TBlock
+      [ NFor <$> genHashOf TIdent <*> genHashOf TExpr <*> genHashOf TBlock
       , NIfThen <$> genHashOf TExpr <*> genHashOf TBlock
       , NIfThenElse <$> genHashOf TExpr <*> genHashOf TBlock <*> genHashOf TBlock
       , pure NSHole
       ]
+    TIdent -> do
+      Ident i <- genIdent
+      pure $ NIdent i
+    TList nt' -> NList nt' <$> Gen.list (Range.constant 0 10) (genHashOf nt')
 
 data SomeNode where
   SomeNode :: KnownNodeType a => Node a -> SomeNode

@@ -1,5 +1,6 @@
 {-# language GADTs, KindSignatures #-}
 {-# language RankNTypes #-}
+{-# language ScopedTypeVariables, TypeApplications #-}
 {-# language StandaloneDeriving #-}
 {-# language TypeOperators #-}
 {-# options_ghc -fno-warn-overlapping-patterns #-}
@@ -10,7 +11,9 @@ import Data.Functor.Identity (Identity(..))
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Type.Equality ((:~:)(..))
 
-import Syntax (Expr(..), Statement(..), Block(..), Ident)
+import NodeType (KnownNodeType, NodeType(..), nodeType)
+import qualified NodeType
+import Syntax (Expr(..), Statement(..), Block(..), Ident, List(..))
 
 data Path a :: * -> * where
   Nil :: Path a a
@@ -58,6 +61,7 @@ data Level :: * -> * -> * where
   Print_Value :: Level Statement Expr
 
   Def_Name :: Level Statement Ident
+  Def_Args :: Level Statement (List Ident)
   Def_Body :: Level Statement Block
 
   BinOp_Left :: Level Expr Expr
@@ -66,6 +70,8 @@ data Level :: * -> * -> * where
   UnOp_Value :: Level Expr Expr
 
   Block_Index :: Int -> Level Block Statement
+
+  List_Index :: Int -> Level (List a) a
 deriving instance Show (Level a b)
 
 eqLevel :: Level a b -> Level a c -> Maybe (b :~: c)
@@ -111,6 +117,10 @@ eqLevel l1 l2 =
       case l2 of
         Def_Name -> Just Refl
         _ -> Nothing
+    Def_Args ->
+      case l2 of
+        Def_Args -> Just Refl
+        _ -> Nothing
     Def_Body ->
       case l2 of
         Def_Body -> Just Refl
@@ -130,6 +140,12 @@ eqLevel l1 l2 =
     Block_Index n ->
       case l2 of
         Block_Index n' -> do
+          guard $ n == n'
+          pure Refl
+        _ -> Nothing
+    List_Index n ->
+      case l2 of
+        List_Index n' -> do
           guard $ n == n'
           pure Refl
         _ -> Nothing
@@ -204,6 +220,12 @@ traversal p f a =
               (\name' -> Def name' args body) <$>
               traversal p' f name
             _ -> pure a
+        Def_Args ->
+          case a of
+            Def name args body ->
+              (\args' -> Def name args' body) <$>
+              traversal p' f args
+            _ -> pure a
         Def_Body ->
           case a of
             Def name args body ->
@@ -243,33 +265,51 @@ traversal p f a =
               traversal p' f (NonEmpty.toList sts !! n)
             _ -> pure a
 
+        List_Index n ->
+          case a of
+            List xs | n >= 0, n < length xs ->
+              (\val ->
+                 let
+                   (prefix, suffix) = splitAt n xs
+                 in
+                   List $ prefix ++ val : drop 1 suffix
+              ) <$>
+              traversal p' f (xs !! n)
+            _ -> pure a
+
 modify :: Path a b -> (b -> b) -> a -> a
 modify p f = runIdentity . traversal p (Identity . f)
 
 set :: Path a b -> b -> a -> a
 set p v = modify p (const v)
 
-showingLevelTarget :: Show a => Level a b -> (Show b => r) -> r
-showingLevelTarget l f =
+withKnownLevelTarget :: forall a b r. KnownNodeType a => Level a b -> (KnownNodeType b => r) -> r
+withKnownLevelTarget l k =
   case l of
-    For_Ident -> f
-    For_Expr -> f
-    For_Block -> f
-    IfThen_Cond -> f
-    IfThen_Then -> f
-    IfThenElse_Cond -> f
-    IfThenElse_Then -> f
-    IfThenElse_Else -> f
-    Print_Value -> f
-    Def_Name -> f
-    Def_Body -> f
-    BinOp_Left -> f
-    BinOp_Right -> f
-    UnOp_Value -> f
-    Block_Index{} -> f
+    For_Ident -> k
+    For_Expr -> k
+    For_Block -> k
+    IfThen_Cond -> k
+    IfThen_Then -> k
+    IfThenElse_Cond -> k
+    IfThenElse_Then -> k
+    IfThenElse_Else -> k
+    Print_Value -> k
+    Def_Name -> k
+    Def_Args -> k
+    Def_Body -> k
+    BinOp_Left -> k
+    BinOp_Right -> k
+    UnOp_Value -> k
+    Block_Index{} -> k
+    List_Index{} ->
+      case nodeType @a of
+        TList ty -> NodeType.withNodeType ty k
 
-showingPathTarget :: Show a => Path a b -> (Show b => r) -> r
+showingPathTarget :: forall a b r. KnownNodeType a => Path a b -> (Show b => r) -> r
 showingPathTarget path f =
   case path of
-    Nil -> f
-    Cons l rest -> showingLevelTarget l (showingPathTarget rest f)
+    Nil ->
+      NodeType.showingNodeType (nodeType @a) f
+    Cons l rest ->
+      withKnownLevelTarget l (showingPathTarget rest f)

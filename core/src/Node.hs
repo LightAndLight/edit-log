@@ -45,6 +45,104 @@ instance GEq Node where
           NList nt' hs' -> do
             Refl <- geq nt nt'
             if hs == hs' then Just Refl else Nothing
+          _ -> Nothing
+      NFor ha hb hc ->
+        case b of
+          NFor ha' hb' hc' -> do
+            Refl <- geq ha ha'
+            Refl <- geq hb hb'
+            Refl <- geq hc hc'
+            pure Refl
+          _ -> Nothing
+      NIfThen ha hb ->
+        case b of
+          NIfThen ha' hb' -> do
+            Refl <- geq ha ha'
+            Refl <- geq hb hb'
+            pure Refl
+          _ -> Nothing
+      NIfThenElse ha hb hc ->
+        case b of
+          NIfThenElse ha' hb' hc' -> do
+            Refl <- geq ha ha'
+            Refl <- geq hb hb'
+            Refl <- geq hc hc'
+            pure Refl
+          _ -> Nothing
+      NPrint ha ->
+        case b of
+          NPrint ha' -> do
+            Refl <- geq ha ha'
+            pure Refl
+          _ -> Nothing
+      NDef ha hb hc ->
+        case b of
+          NDef ha' hb' hc' -> do
+            Refl <- geq ha ha'
+            Refl <- geq hb hb'
+            Refl <- geq hc hc'
+            pure Refl
+          _ -> Nothing
+      NBool x ->
+        case b of
+          NBool x' -> if x == x' then pure Refl else Nothing
+          _ -> Nothing
+      NInt x ->
+        case b of
+          NInt x' -> if x == x' then pure Refl else Nothing
+          _ -> Nothing
+      NBinOp op ha hb ->
+        case b of
+          NBinOp op' ha' hb' ->
+            if op == op'
+            then do
+              Refl <- geq ha ha'
+              Refl <- geq hb hb'
+              pure Refl
+            else Nothing
+          _ -> Nothing
+      NUnOp op ha ->
+        case b of
+          NUnOp op' ha' ->
+            if op == op'
+            then do
+              Refl <- geq ha ha'
+              pure Refl
+            else Nothing
+          _ -> Nothing
+      NEIdent x ->
+        case b of
+          NEIdent x' ->
+            if x == x'
+            then pure Refl
+            else Nothing
+          _ -> Nothing
+      NBlock xs ->
+        case b of
+          NBlock xs' ->
+            if xs == xs'
+            then pure Refl
+            else Nothing
+          _ -> Nothing
+      NIdent x ->
+        case b of
+          NIdent x' ->
+            if x == x'
+            then pure Refl
+            else Nothing
+          _ -> Nothing
+      NSHole ->
+        case b of
+          NSHole -> pure Refl
+          _ -> Nothing
+      NEHole ->
+        case b of
+          NEHole -> pure Refl
+          _ -> Nothing
+      NIHole ->
+        case b of
+          NIHole -> pure Refl
+          _ -> Nothing
 deriveGShow ''Node
 
 eqNode :: Node a -> Node b -> Maybe (a :~: b)
