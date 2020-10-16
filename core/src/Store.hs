@@ -4,9 +4,11 @@
 module Store where
 
 import Control.Applicative (empty)
+import Control.Monad.Except (ExceptT)
+import Control.Monad.Reader (ReaderT)
+import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
-import Control.Monad.State (StateT)
 import Data.Function (on)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NonEmpty
@@ -32,6 +34,9 @@ class Monad m => MonadStore m where
   addNode = lift . addNode
 
 instance MonadStore m => MonadStore (StateT s m)
+instance MonadStore m => MonadStore (ReaderT r m)
+instance MonadStore m => MonadStore (ExceptT e m)
+instance MonadStore m => MonadStore (MaybeT m)
 
 modifyH :: MonadStore m => Path a b -> (Hash b -> m (Hash b)) -> Hash a -> m (Maybe (Hash a))
 modifyH path_ f_ = runMaybeT . go path_ f_

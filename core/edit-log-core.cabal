@@ -14,8 +14,9 @@ category:            Language
 extra-source-files:  CHANGELOG.md
 
 library
-  exposed-modules:     
-                       Diff
+  exposed-modules:
+                       Check
+                     , Diff
                      , Diff.SequenceDiff
                      , Hash
                      , Log

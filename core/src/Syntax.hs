@@ -9,7 +9,7 @@ import GHC.Generics (Generic)
 data Ident
   = Ident String
   | IHole
-  deriving (Eq, Generic, Show)
+  deriving (Eq, Ord, Generic, Show)
 instance Hashable Ident
 
 newtype Block
