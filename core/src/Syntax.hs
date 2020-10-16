@@ -24,6 +24,7 @@ data Statement
   | IfThen Expr Block
   | IfThenElse Expr Block Block
   | Print Expr
+  | Return Expr
   | Def Ident (List Ident) Block
   | SHole
   deriving Show

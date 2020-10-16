@@ -454,6 +454,7 @@ isHole n =
     NIfThen{} -> False
     NIfThenElse{} -> False
     NPrint{} -> False
+    NReturn{} -> False
     NDef{} -> False
     NBool{} -> False
     NInt{} -> False
@@ -671,6 +672,21 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                       _ -> NoFocus
                   )
                   (Path.snoc path Print_Value)
+                  val
+            NReturn val ->
+              syntaxLine mempty $ do
+                syntaxKeyword mempty $ Dom.text "return"
+                syntaxColon mempty
+                renderNodeHash
+                  contextMenuControls
+                  controls
+                  dMenu
+                  versioned
+                  (case focus of
+                      Focus (Cons Return_Value focusPath) -> Focus focusPath
+                      _ -> NoFocus
+                  )
+                  (Path.snoc path Return_Value)
                   val
             NDef name args body -> do
               ((eDefName, defNameInfo, defNameFocus), (eDefArgs, defArgsInfo, defArgsFocus)) <-

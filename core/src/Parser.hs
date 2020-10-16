@@ -84,11 +84,16 @@ simpleStatement =
   forSt <|>
   ifSt <|>
   printSt <|>
+  returnSt <|>
   defSt <|>
   SHole <$ token (char '?')
   where
     printSt =
       Print <$ token (string "print") <* token (char ':') <*>
+      expr
+
+    returnSt =
+      Return <$ token (string "return") <* token (char ':') <*>
       expr
 
     forSt =

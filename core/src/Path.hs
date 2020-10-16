@@ -60,6 +60,8 @@ data Level :: * -> * -> * where
 
   Print_Value :: Level Statement Expr
 
+  Return_Value :: Level Statement Expr
+
   Def_Name :: Level Statement Ident
   Def_Args :: Level Statement (List Ident)
   Def_Body :: Level Statement Block
@@ -112,6 +114,10 @@ eqLevel l1 l2 =
     Print_Value ->
       case l2 of
         Print_Value -> Just Refl
+        _ -> Nothing
+    Return_Value ->
+      case l2 of
+        Return_Value -> Just Refl
         _ -> Nothing
     Def_Name ->
       case l2 of
@@ -214,6 +220,13 @@ traversal p f a =
               traversal p' f val
             _ -> pure a
 
+        Return_Value ->
+          case a of
+            Return val ->
+              Return <$>
+              traversal p' f val
+            _ -> pure a
+
         Def_Name ->
           case a of
             Def name args body ->
@@ -295,6 +308,7 @@ withKnownLevelTarget l k =
     IfThenElse_Then -> k
     IfThenElse_Else -> k
     Print_Value -> k
+    Return_Value -> k
     Def_Name -> k
     Def_Args -> k
     Def_Body -> k

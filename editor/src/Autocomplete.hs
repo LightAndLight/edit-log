@@ -33,6 +33,7 @@ baseStatementCompletions =
   , ("if else", IfThenElse EHole (Block $ pure SHole) (Block $ pure SHole))
   , ("print", Print EHole)
   , ("def", Def IHole (List []) $ Block (pure SHole))
+  , ("return", Return EHole)
   ]
 
 data Found

@@ -101,6 +101,13 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                   lift . addNode $ NPrint valh'
                 _ -> empty
 
+            Return_Value ->
+              case n of
+                NReturn valh -> do
+                  valh' <- go rest f valh
+                  lift . addNode $ NReturn valh'
+                _ -> empty
+
             Def_Name ->
               case n of
                 NDef nameh args bodyh -> do
@@ -248,6 +255,14 @@ setH path_ val_ = runMaybeT . go path_ val_
                   pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
+            Return_Value ->
+              case n of
+                NReturn valh -> do
+                  res <- go rest mval valh
+                  rooth' <- lift . addNode $ NReturn (rootHash res)
+                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+                _ -> empty
+
             Def_Name ->
               case n of
                 NDef nameh args bodyh -> do
@@ -389,6 +404,8 @@ rebuild = runMaybeT . go
               go else_
             NPrint val ->
               Print <$> go val
+            NReturn val ->
+              Return <$> go val
             NDef name args body ->
               Def <$>
               go name <*>
@@ -459,6 +476,9 @@ addStatement s =
     Print val -> do
       valh <- addExpr val
       addNode $ NPrint valh
+    Return val -> do
+      valh <- addExpr val
+      addNode $ NReturn valh
     Def name args body -> do
       nameh <- addIdent name
       argsh <- addList addIdent args
@@ -532,6 +552,10 @@ getH path h =
             Print_Value ->
               case node of
                 NPrint val -> getH rest val
+                _ -> pure Nothing
+            Return_Value ->
+              case node of
+                NReturn val -> getH rest val
                 _ -> pure Nothing
             Def_Name ->
               case node of

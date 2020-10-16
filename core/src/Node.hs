@@ -19,6 +19,7 @@ data Node :: * -> * where
   NIfThen :: Hash Expr -> Hash Block -> Node Statement
   NIfThenElse :: Hash Expr -> Hash Block -> Hash Block -> Node Statement
   NPrint :: Hash Expr -> Node Statement
+  NReturn :: Hash Expr -> Node Statement
   NDef :: Hash Ident -> Hash (List Ident) -> Hash Block -> Node Statement
 
   NBool :: Bool -> Node Expr
@@ -72,6 +73,12 @@ instance GEq Node where
       NPrint ha ->
         case b of
           NPrint ha' -> do
+            Refl <- geq ha ha'
+            pure Refl
+          _ -> Nothing
+      NReturn ha ->
+        case b of
+          NReturn ha' -> do
             Refl <- geq ha ha'
             pure Refl
           _ -> Nothing
@@ -181,6 +188,8 @@ instance Hashable (Node a) where
 
       NList nt hs -> hashWithSalt s (14::Int, nt, hs)
 
+      NReturn e -> hashWithSalt s (15::Int, e)
+
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
   case n of
@@ -188,6 +197,7 @@ hashNode n =
     NIfThen{} -> HStatement $ hash n
     NIfThenElse{} -> HStatement $ hash n
     NPrint{} -> HStatement $ hash n
+    NReturn{} -> HStatement $ hash n
     NDef{} -> HStatement $ hash n
 
     NBool{} -> HExpr $ hash n
