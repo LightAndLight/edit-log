@@ -27,12 +27,12 @@ import qualified Data.Text as Text
 import qualified GHCJS.DOM.EventM as EventM
 import qualified GHCJS.DOM.GlobalEventHandlers as Events
 import qualified GHCJS.DOM.KeyboardEvent as KeyboardEvent
-import JSDOM.Types (DOMRect, HTMLInputElement)
-import qualified JSDOM.Element as Element
-import qualified JSDOM.DOMRect as DOMRect
-import qualified JSDOM.HTMLElement as HTMLElement
-import qualified JSDOM.HTMLInputElement as HTMLInputElement
-import qualified JSDOM.Types as JSDOM
+import qualified GHCJS.DOM.Element as Element
+import qualified GHCJS.DOM.DOMRect as DOMRect
+import qualified GHCJS.DOM.HTMLElement as HTMLElement
+import qualified GHCJS.DOM.HTMLInputElement as HTMLInputElement
+import GHCJS.DOM.Types (DOMRect, HTMLInputElement)
+import qualified GHCJS.DOM.Types as GHCJS.DOM
 import Language.Javascript.JSaddle.Monad (MonadJSM)
 import Reflex
 import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace, HasDocument, mainWidgetWithHead)
@@ -312,7 +312,7 @@ contextMenuEntries controls path = do
       let
         htmlInputElement :: HTMLInputElement
         htmlInputElement =
-          JSDOM.uncheckedCastTo JSDOM.HTMLInputElement (Dom._element_raw inputElement)
+          GHCJS.DOM.uncheckedCastTo GHCJS.DOM.HTMLInputElement (Dom._element_raw inputElement)
 
       eInput :: Event t Text <-
         fmap (fmapMaybe id) .
@@ -321,7 +321,7 @@ contextMenuEntries controls path = do
           case mTarget of
             Nothing -> pure Nothing
             Just target ->
-              lift $ Just <$> HTMLInputElement.getValue (JSDOM.uncheckedCastTo JSDOM.HTMLInputElement target)
+              lift $ Just <$> HTMLInputElement.getValue (GHCJS.DOM.uncheckedCastTo GHCJS.DOM.HTMLInputElement target)
 
       dValue <- holdDyn "" eInput
 
