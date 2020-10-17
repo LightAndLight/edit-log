@@ -2,8 +2,10 @@
 {-# language StandaloneDeriving #-}
 {-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
+{-# options_ghc -fno-warn-overlapping-patterns #-}
 module Node where
 
+import Control.Lens.TH (makePrisms)
 import Data.Hashable (Hashable(..))
 import Data.GADT.Compare (geq)
 import Data.GADT.Compare.TH (deriveGEq)
@@ -43,6 +45,7 @@ data Node :: * -> * where
 deriving instance Show (Node a)
 deriveGEq ''Node
 deriveGShow ''Node
+makePrisms ''Node
 
 eqNode :: Node a -> Node b -> Maybe (a :~: b)
 eqNode = geq

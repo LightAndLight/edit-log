@@ -19,6 +19,7 @@ library
                      , containers
                      , ghcjs-dom
                      , jsaddle
+                     , lens
                      , reflex
                      , reflex-dom
                      , text

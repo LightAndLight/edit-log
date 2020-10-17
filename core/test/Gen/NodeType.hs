@@ -28,9 +28,8 @@ genEqualNodeType (Some ty) =
     TExpr -> pure $ Some TExpr
     TStatement -> pure $ Some TStatement
     TIdent -> pure $ Some TIdent
-    TList ty' -> do
-      Some res <- genEqualNodeType (Some ty')
-      pure $ Some (TList res)
+    TArgs -> pure $ Some TArgs
+    TParams -> pure $ Some TParams
 
 genEqualNodeTypes :: Gen (Some NodeType, Some NodeType)
 genEqualNodeTypes =
@@ -38,4 +37,7 @@ genEqualNodeTypes =
   [ (Some TBlock, Some TBlock)
   , (Some TExpr, Some TExpr)
   , (Some TStatement, Some TStatement)
+  , (Some TIdent, Some TIdent)
+  , (Some TArgs, Some TArgs)
+  , (Some TParams, Some TParams)
   ]

@@ -28,7 +28,8 @@ genHashOf ty = do
     TExpr -> HExpr n
     TStatement -> HStatement n
     TIdent -> HIdent n
-    TList nt -> HList nt n
+    TArgs -> HArgs n
+    TParams -> HParams n
 
 genHash :: Gen (Some Hash)
 genHash = do
@@ -45,4 +46,7 @@ genEqualHashes = do
     [ (Some $ HBlock n, Some $ HBlock n)
     , (Some $ HExpr n, Some $ HExpr n)
     , (Some $ HStatement n, Some $ HStatement n)
+    , (Some $ HIdent n, Some $ HIdent n)
+    , (Some $ HArgs n, Some $ HArgs n)
+    , (Some $ HParams n, Some $ HParams n)
     ]

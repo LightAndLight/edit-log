@@ -3,10 +3,15 @@
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
 {-# language StandaloneDeriving #-}
+{-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
 {-# options_ghc -fno-warn-overlapping-patterns #-}
 module Path where
 
+import Control.Lens.Fold ((^?))
+import Control.Lens.Prism (Prism')
+import Control.Lens.Review (review)
+import Control.Lens.TH (makePrisms)
 import Control.Monad (guard)
 import Data.Functor.Identity (Identity(..))
 import qualified Data.List.NonEmpty as NonEmpty
@@ -14,38 +19,10 @@ import Data.Type.Equality ((:~:)(..))
 
 import NodeType (KnownNodeType, nodeType)
 import qualified NodeType
-import Syntax (Expr(..), Statement(..), Block(..), Ident, Args(..), Params(..))
-
-data Path a :: * -> * where
-  Nil :: Path a a
-  Cons :: Level a b -> Path b c -> Path a c
-deriving instance Show (Path a b)
-
-append :: Path a b -> Path b c -> Path a c
-append p1 p2 =
-  case p1 of
-    Nil -> p2
-    Cons l p1' -> Cons l (append p1' p2)
-
-snoc :: Path a b -> Level b c -> Path a c
-snoc p l =
-  case p of
-    Nil -> Cons l Nil
-    Cons l' p' -> Cons l' (snoc p' l)
-
-eqPath :: Path a b -> Path a c -> Maybe (b :~: c)
-eqPath p1 p2 =
-  case p1 of
-    Nil ->
-      case p2 of
-        Nil -> Just Refl
-        Cons{} -> Nothing
-    Cons l p1' ->
-      case p2 of
-        Nil -> Nothing
-        Cons l' p2' -> do
-          Refl <- eqLevel l l'
-          eqPath p1' p2'
+import Syntax
+  ( Expr(..), Statement(..), Block(..), Ident, Args(..), Params(..)
+  , _Args, _Params
+  )
 
 data Level :: * -> * -> * where
   For_Ident :: Level Statement Ident
@@ -80,6 +57,38 @@ data Level :: * -> * -> * where
   Args_Index :: Int -> Level Args Expr
   Params_Index :: Int -> Level Params Ident
 deriving instance Show (Level a b)
+makePrisms ''Level
+
+data Path a :: * -> * where
+  Nil :: Path a a
+  Cons :: Level a b -> Path b c -> Path a c
+deriving instance Show (Path a b)
+
+append :: Path a b -> Path b c -> Path a c
+append p1 p2 =
+  case p1 of
+    Nil -> p2
+    Cons l p1' -> Cons l (append p1' p2)
+
+snoc :: Path a b -> Level b c -> Path a c
+snoc p l =
+  case p of
+    Nil -> Cons l Nil
+    Cons l' p' -> Cons l' (snoc p' l)
+
+eqPath :: Path a b -> Path a c -> Maybe (b :~: c)
+eqPath p1 p2 =
+  case p1 of
+    Nil ->
+      case p2 of
+        Nil -> Just Refl
+        Cons{} -> Nothing
+    Cons l p1' ->
+      case p2 of
+        Nil -> Nothing
+        Cons l' p2' -> do
+          Refl <- eqLevel l l'
+          eqPath p1' p2'
 
 eqLevel :: Level a b -> Level a c -> Maybe (b :~: c)
 eqLevel l1 l2 =
@@ -311,25 +320,24 @@ traversal p f a =
             _ -> pure a
 
         Args_Index n ->
-          traversalList (\case; Args xs -> Just xs; _ -> Nothing) Args n p' f a
+          traversalList _Args n p' f a
 
         Params_Index n ->
-          traversalList (\case; Params xs -> Just xs; _ -> Nothing) Params n p' f a
+          traversalList _Params n p' f a
 
 traversalList ::
-  (a -> Maybe [b]) ->
-  ([b] -> a) ->
+  Prism' a [b] ->
   Int ->
   Path b c ->
   forall f. Applicative f => (c -> f c) -> a -> f a
-traversalList match build ix path f a =
-  case match a of
+traversalList _Ctor ix path f a =
+  case a ^? _Ctor of
     Just xs | ix >= 0, ix < length xs ->
       (\val ->
          let
            (prefix, suffix) = splitAt ix xs
          in
-           build $ prefix ++ val : drop 1 suffix
+           review _Ctor $ prefix ++ val : drop 1 suffix
       ) <$>
       traversal path f (xs !! ix)
     _ ->

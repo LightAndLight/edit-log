@@ -5,7 +5,8 @@ module Parser
   , expr
   , ident
   , simpleStatement
-  , list
+  , args
+  , params
   )
 where
 
@@ -14,7 +15,7 @@ import Text.Parser.Combinators (between, eof, sepBy)
 import Text.Parser.Char (CharParsing, alphaNum, char, digit, lower, string, spaces)
 import Text.ParserCombinators.ReadP (ReadP, readP_to_S)
 
-import Syntax (Block(..), Expr(..), Ident(..), List(..), Statement(..), BinOp(..), UnOp(..))
+import Syntax (Block(..), Expr(..), Ident(..), Statement(..), BinOp(..), UnOp(..), Args(..), Params(..))
 
 type Parser = ReadP
 
@@ -57,7 +58,7 @@ expr = orOp
     call =
       (\e -> maybe e (Call e)) <$>
       atom <*>
-      optional (between (token $ char '(') (token $ char ')') (list expr))
+      optional args
 
     atom =
       token $
@@ -116,13 +117,16 @@ simpleStatement =
       optional (token (string "else") *> token (char ':') *> simpleStatement)
 
     defSt =
-      (\n args -> Def n args . Block . pure) <$ token (string "def") <*>
+      (\n as -> Def n as . Block . pure) <$ token (string "def") <*>
       token ident <*>
-      between
-        (token $ char '(')
-        (token $ char ')')
-        (list ident) <* token (char ':') <*>
+      params <*>
       simpleStatement
 
-list :: CharParsing m => m a -> m (List a)
-list ma = (fmap List $ ma `sepBy` token (char ','))
+args :: CharParsing m => m Args
+args = Args <$> between (token $ char '(') (token $ char ')') (list expr)
+
+params :: CharParsing m => m Params
+params = Params <$> between (token $ char '(') (token $ char ')') (list ident)
+
+list :: CharParsing m => m a -> m [a]
+list ma = (ma `sepBy` token (char ','))

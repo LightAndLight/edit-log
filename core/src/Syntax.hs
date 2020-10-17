@@ -1,7 +1,10 @@
 {-# language GeneralisedNewtypeDeriving #-}
 {-# language DeriveGeneric #-}
+{-# language TemplateHaskell #-}
+{-# options_ghc -fno-warn-overlapping-patterns #-}
 module Syntax where
 
+import Control.Lens.TH (makePrisms)
 import Data.Hashable (Hashable)
 import Data.List.NonEmpty (NonEmpty)
 import GHC.Generics (Generic)
@@ -12,15 +15,9 @@ data Ident
   deriving (Eq, Ord, Generic, Show)
 instance Hashable Ident
 
-newtype Block
-  = Block (NonEmpty Statement)
-  deriving Show
-
-newtype Args = Args [Expr]
-  deriving Show
-
 newtype Params = Params [Ident]
   deriving Show
+makePrisms ''Params
 
 data Statement
   = For Ident Expr Block
@@ -30,6 +27,10 @@ data Statement
   | Return Expr
   | Def Ident Params Block
   | SHole
+  deriving Show
+
+newtype Block
+  = Block (NonEmpty Statement)
   deriving Show
 
 data BinOp
@@ -52,6 +53,9 @@ data UnOp
   deriving (Eq, Generic, Show, Enum, Bounded)
 instance Hashable UnOp
 
+newtype Args = Args [Expr]
+  deriving Show
+
 data Expr
   = Bool Bool
   | Int Int
@@ -61,3 +65,5 @@ data Expr
   | EIdent String
   | EHole
   deriving Show
+
+makePrisms ''Args

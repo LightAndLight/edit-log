@@ -1,9 +1,14 @@
 {-# language GADTs #-}
 {-# language InstanceSigs, DefaultSignatures #-}
+{-# language LambdaCase #-}
+{-# language RankNTypes #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
 module Store where
 
 import Control.Applicative (empty)
+import Control.Lens.Fold ((^?), Fold)
+import Control.Lens.Prism (Prism')
+import Control.Lens.Review (review)
 import Control.Monad.Except (ExceptT)
 import Control.Monad.Reader (ReaderT)
 import Control.Monad.State (StateT)
@@ -14,11 +19,10 @@ import qualified Data.List as List
 import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
-import Node (Node(..))
+import Node (Node(..), _NArgs, _NParams)
 import NodeType (KnownNodeType, NodeType(..), nodeType)
-import qualified NodeType
 import Path (Path(..), Level(..))
-import Syntax (Expr(..), Statement(..), Block(..), Ident(..), List(..))
+import Syntax (Expr(..), Statement(..), Block(..), Ident(..), Args(..), Params(..))
 
 class Monad m => MonadStore m where
   lookupNode :: Hash a -> m (Maybe (Node a))
@@ -176,16 +180,30 @@ modifyH path_ f_ = runMaybeT . go path_ f_
                       lift . addNode $ NBlock (foldr NonEmpty.cons (elh' NonEmpty.:| suffix) prefix)
                 _ -> empty
 
-            List_Index ix -> do
-              case n of
-                NList nt xs | 0 <= ix && ix < length xs -> do
-                  let (prefix, more) = List.splitAt ix xs
-                  case more of
-                    [] -> error "impossible"
-                    elh : suffix -> do
-                      elh' <- go rest f elh
-                      NodeType.withNodeType nt (lift . addNode $ NList nt (prefix ++ elh' : suffix))
-                _ -> empty
+            Args_Index ix ->
+              MaybeT $ modifyHList _NArgs ix rest f n
+            Params_Index ix ->
+              MaybeT $ modifyHList _NParams ix rest f n
+
+modifyHList ::
+  (KnownNodeType a, MonadStore m) =>
+  Prism' (Node a) [Hash b] ->
+  Int ->
+  Path b c ->
+  (Hash c -> m (Hash c)) ->
+  Node a ->
+  m (Maybe (Hash a))
+modifyHList _Ctor ix path f n =
+  runMaybeT $
+  case n ^? _Ctor of
+    Just xs | 0 <= ix && ix < length xs -> do
+      let (prefix, more) = List.splitAt ix xs
+      case more of
+        [] -> error "impossible"
+        elh : suffix -> do
+          elh' <- MaybeT $ modifyH path f elh
+          lift . addNode $ review _Ctor (prefix ++ elh' : suffix)
+    _ -> empty
 
 data SetH a b
   = SetH
@@ -353,17 +371,31 @@ setH path_ val_ = runMaybeT . go path_ val_
                       pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
                 _ -> empty
 
-            List_Index ix -> do
-              case n of
-                NList nt xs | 0 <= ix && ix < length xs -> do
-                  let (prefix, more) = List.splitAt ix xs
-                  case more of
-                    [] -> error "impossible"
-                    elh : suffix -> do
-                      res <- go rest mval elh
-                      rooth' <- NodeType.withNodeType nt (lift . addNode $ NList nt (prefix ++ rootHash res : suffix))
-                      pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
+            Args_Index ix ->
+              MaybeT $ setHList _NArgs ix rest mval n
+            Params_Index ix ->
+              MaybeT $ setHList _NParams ix rest mval n
+
+setHList ::
+  (KnownNodeType a, MonadStore m) =>
+  Prism' (Node a) [Hash b] ->
+  Int ->
+  Path b c ->
+  m (Hash c)->
+  Node a ->
+  m (Maybe (SetH a c))
+setHList _Ctor ix path mval n =
+  runMaybeT $
+  case n ^? _Ctor of
+    Just xs | 0 <= ix && ix < length xs -> do
+      let (prefix, more) = List.splitAt ix xs
+      case more of
+        [] -> error "impossible"
+        elh : suffix -> do
+          res <- MaybeT $ setH path mval elh
+          rooth' <- lift . addNode $ review _Ctor (prefix ++ rootHash res : suffix)
+          pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
+    _ -> empty
 
 {-
 
@@ -458,7 +490,8 @@ rebuild = runMaybeT . go
             NEIdent i ->
               pure $ EIdent i
 
-            NList _ xs -> List <$> traverse go xs
+            NArgs xs -> Args <$> traverse go xs
+            NParams xs -> Params <$> traverse go xs
 
             NBlock sts ->
               Block <$> traverse go sts
@@ -490,7 +523,7 @@ addExpr e =
       addNode $ NUnOp op valueh
     Call func args -> do
       funch <- addExpr func
-      argsh <- addList addExpr args
+      argsh <- addArgs args
       addNode $ NCall funch argsh
     EIdent i -> addNode $ NEIdent i
     EHole -> addNode NEHole
@@ -520,15 +553,20 @@ addStatement s =
       addNode $ NReturn valh
     Def name args body -> do
       nameh <- addIdent name
-      argsh <- addList addIdent args
+      argsh <- addParams args
       bodyh <- addBlock body
       addNode $ NDef nameh argsh bodyh
     SHole -> addNode NSHole
 
-addList :: (KnownNodeType a, MonadStore m) => (a -> m (Hash a)) -> List a -> m (Hash (List a))
-addList addIt (List xs) = do
-  xsh <- traverse addIt xs
-  addNode $ NList nodeType xsh
+addArgs :: MonadStore m => Args -> m (Hash Args)
+addArgs (Args xs) = do
+  xsh <- traverse addExpr xs
+  addNode $ NArgs xsh
+
+addParams :: MonadStore m => Params -> m (Hash Params)
+addParams (Params xs) = do
+  xsh <- traverse addIdent xs
+  addNode $ NParams xsh
 
 addKnownNode :: forall a m. (KnownNodeType a, MonadStore m) => a -> m (Hash a)
 addKnownNode a =
@@ -537,7 +575,8 @@ addKnownNode a =
     TStatement -> addStatement a
     TBlock -> addBlock a
     TIdent -> addIdent a
-    TList nt' -> NodeType.withNodeType nt' (addList addKnownNode a)
+    TArgs -> addArgs a
+    TParams -> addParams a
 
 addBlock :: MonadStore m => Block -> m (Hash Block)
 addBlock b =
@@ -634,9 +673,22 @@ getH path h =
                   case lookup ix . zip [0..] $ NonEmpty.toList sts of
                     Nothing -> pure Nothing
                     Just st -> getH rest st
-            List_Index ix ->
-              case node of
-                NList _ xs ->
-                  case lookup ix $ zip [0..] xs of
-                    Nothing -> pure Nothing
-                    Just st -> getH rest st
+            Args_Index ix ->
+              getHList _NArgs ix rest node
+            Params_Index ix ->
+              getHList _NParams ix rest node
+
+getHList ::
+  MonadStore m =>
+  Fold (Node a) [Hash b] ->
+  Int ->
+  Path b c ->
+  Node a ->
+  m (Maybe (Hash c))
+getHList _Ctor ix path n =
+  case n ^? _Ctor of
+    Just xs ->
+      case lookup ix $ zip [0..] xs of
+        Nothing -> pure Nothing
+        Just st -> getH path st
+    _ -> pure Nothing

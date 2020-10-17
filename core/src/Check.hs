@@ -18,7 +18,7 @@ import Control.Lens.Getter ((^.), view, to)
 import Control.Lens.Setter ((<>=), locally)
 import Control.Lens.TH (makeLenses)
 import Control.Monad.IO.Class (MonadIO)
-import Control.Monad.Reader (ReaderT, runReaderT, local)
+import Control.Monad.Reader (ReaderT, runReaderT)
 import Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
 import Control.Monad.State (StateT, runStateT)
 import Data.Foldable (traverse_)
@@ -133,11 +133,11 @@ check path hash = do
       check (Path.snoc path Print_Value) val
     NReturn val ->
       check (Path.snoc path Return_Value) val
-    NDef name argsHash body -> do
-      argsNode <- getNode argsHash
-      case argsNode of
-        NList _ args ->
-          foldr (\arg f -> withScopeEntry arg () . f) id args . withScopeEntry name () $
+    NDef name paramsHash body -> do
+      paramsNode <- getNode paramsHash
+      case paramsNode of
+        NParams params ->
+          foldr (\param f -> withScopeEntry param () . f) id params . withScopeEntry name () $
           check (Path.snoc path Def_Body) body
     NBool{} -> pure ()
     NInt{} -> pure ()
@@ -161,7 +161,13 @@ check path hash = do
 
     NIdent{} -> pure ()
 
-    NList nt xs -> _
+    NArgs xs ->
+      traverse_ (\(ix, st) -> check (Path.snoc path $ Args_Index ix) st) $
+      zip [0..] xs
+
+    NParams xs ->
+      traverse_ (\(ix, st) -> check (Path.snoc path $ Params_Index ix) st) $
+      zip [0..] xs
 
     NSHole -> pure ()
     NEHole -> pure ()

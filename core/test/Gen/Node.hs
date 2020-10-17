@@ -43,7 +43,8 @@ genNodeOf nt =
     TIdent -> do
       Ident i <- genIdent
       pure $ NIdent i
-    TList nt' -> NList nt' <$> Gen.list (Range.constant 0 10) (genHashOf nt')
+    TArgs -> NArgs <$> Gen.list (Range.constant 0 10) (genHashOf TExpr)
+    TParams -> NParams <$> Gen.list (Range.constant 0 10) (genHashOf TIdent)
 
 data SomeNode where
   SomeNode :: KnownNodeType a => Node a -> SomeNode
