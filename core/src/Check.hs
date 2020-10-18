@@ -1,5 +1,6 @@
 {-# language GADTs, KindSignatures #-}
 {-# language GeneralizedNewtypeDeriving #-}
+{-# language StandaloneDeriving #-}
 {-# language TemplateHaskell #-}
 module Check
   ( CheckT
@@ -7,17 +8,18 @@ module Check
   , newCheckEnv
   , CheckState
   , newCheckState
+  , CheckErrorEntry(..)
   , CheckError(..)
   , runCheckT
   , check
   )
 where
 
-import Control.Applicative (empty)
 import Control.Lens.Getter ((^.), view, to)
 import Control.Lens.Setter ((<>=), locally)
 import Control.Lens.TH (makeLenses)
 import Control.Monad.IO.Class (MonadIO)
+import Control.Monad.Trans.Class (MonadTrans(..))
 import Control.Monad.Reader (ReaderT, runReaderT)
 import Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
 import Control.Monad.State (StateT, runStateT)
@@ -55,9 +57,11 @@ newCheckEnv =
 
 data CheckErrorEntry a where
   CheckErrorEntry :: Path a b -> CheckError b -> CheckErrorEntry a
+deriving instance Show (CheckErrorEntry a)
 
 data CheckError :: * -> * where
   NotInScope :: String -> CheckError Expr
+deriving instance Show (CheckError a)
 
 data CheckState a
   = CheckState
@@ -77,6 +81,9 @@ newtype CheckT a m x
   }
   deriving (Functor, Applicative, Monad, MonadIO, MonadStore)
 
+instance MonadTrans (CheckT a) where
+  lift = CheckT . lift . lift . lift
+
 withScopeEntry ::
   MonadStore m =>
   Hash Ident -> () ->
@@ -94,10 +101,9 @@ lookupScopeEntry ::
   CheckT a m (Maybe ())
 lookupScopeEntry k = CheckT $ view (ceScope.to (Map.lookup k))
 
-checkError :: Monad m => Path a b -> CheckError b -> CheckT a m x
-checkError path err = do
+checkError :: Monad m => Path a b -> CheckError b -> CheckT a m ()
+checkError path err =
   CheckT $ csErrors <>= [CheckErrorEntry path err]
-  CheckT empty
 
 runCheckT ::
   Monad m =>

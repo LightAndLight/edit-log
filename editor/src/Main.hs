@@ -28,6 +28,8 @@ import Reflex
 import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace, HasDocument, mainWidgetWithHead)
 import qualified Reflex.Dom as Dom
 
+import Check (CheckErrorEntry)
+import qualified Check
 import Hash (Hash)
 import Log (Entry, Time)
 import Node (Node(..))
@@ -874,6 +876,21 @@ editor initial initialFocus = do
          ]
         )
 
+    let
+      dCheckResult :: Dynamic t (Either [CheckErrorEntry a] ())
+      dCheckResult =
+        (\versioned ->
+          let
+            Identity (res, _) =
+              runVersionedT versioned .
+              Check.runCheckT Check.newCheckEnv Check.newCheckState $ do
+                rootHash <- lift Versioned.getRoot
+                Check.check Nil rootHash
+          in
+            res
+        ) <$>
+        dVersioned
+
     dMenu <-
       foldDyn
         (\nodeEvent now ->
@@ -912,6 +929,8 @@ editor initial initialFocus = do
 
     eContextMenu :: Event t (ContextMenuEvent a) <-
       renderContextMenu contextMenuControls dMenu dFocus dFocusElement
+
+  Dom.dyn_ $ Dom.text . Text.pack .  show <$> dCheckResult
 
   pure ()
 
