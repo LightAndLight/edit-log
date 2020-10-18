@@ -10,7 +10,9 @@ category:            Web
 extra-source-files:  CHANGELOG.md
 
 library
-  exposed-modules:     Autocomplete
+  exposed-modules:     Attrs
+                     , Autocomplete
+                     , ContextMenu
                      , Focus
                      , Navigation
                      , Main
