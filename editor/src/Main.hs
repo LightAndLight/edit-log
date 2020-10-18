@@ -42,7 +42,6 @@ import Hash (Hash)
 import Log (Entry, Time)
 import Node (Node(..))
 import NodeType (KnownNodeType, NodeType(..), nodeType)
-import qualified NodeType
 import qualified Parser
 import Path (Path(..), Level(..))
 import qualified Path
@@ -218,7 +217,8 @@ selectParser =
     TExpr -> Parser.expr
     TStatement -> Parser.simpleStatement
     TIdent -> Parser.ident
-    TList (ty :: NodeType b) -> Parser.list (NodeType.withNodeType ty (selectParser @b))
+    TArgs -> Parser.args
+    TParams -> Parser.params
 
 contextMenuEntries ::
   forall t m a b.
@@ -288,7 +288,13 @@ contextMenuEntries controls path = do
                   []
                 Right val ->
                   [(inputValue, Right val)]
-            TList{} ->
+            TArgs ->
+              case parseResult of
+                Left{} ->
+                  []
+                Right val ->
+                  [(inputValue, Right val)]
+            TParams ->
               case parseResult of
                 Left{} ->
                   []
@@ -464,7 +470,8 @@ isHole n =
     NCall{} -> False
     NBlock{} -> False
     NIdent{} -> False
-    NList{} -> False
+    NArgs{} -> False
+    NParams{} -> False
 
     NSHole{} -> True
     NEHole{} -> True
@@ -505,7 +512,8 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
             TBlock -> "class" =: "syntax-block"
             TStatement -> "class" =: "syntax-statement"
             TIdent -> "class" =: "syntax-ident"
-            TList{} -> "class" =: "syntax-list"
+            TArgs -> "class" =: "syntax-args"
+            TParams -> "class" =: "syntax-params"
       ) <>
       fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
       if inFocus then pure ("class" =: "syntax-focused") else mempty
@@ -848,7 +856,7 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                 , foldMap (\(_, a, _) -> a) nodes
                 , asum $ (\(_, _, a) -> a) <$> nodes
                 )
-            NList nt xs -> do
+            NArgs xs -> do
               nodes <-
                 syntaxInline mempty $ do
                   syntaxLParen mempty
@@ -860,15 +868,41 @@ renderNode controls contextMenuControls dMenu versioned focus path inFocus dHove
                             (never, mempty, Nothing) <$ syntaxComma mempty
                           Just (ix, x) ->
                             let
-                              path' = Path.snoc path (List_Index ix)
+                              path' = Path.snoc path (Args_Index ix)
                             in
                               case focus of
-                                Focus (Cons (List_Index ix') focus') | ix == ix' ->
-                                  NodeType.withNodeType nt
-                                    (renderNodeHash contextMenuControls controls dMenu versioned (Focus focus') path' x)
+                                Focus (Cons (Args_Index ix') focus') | ix == ix' ->
+                                  renderNodeHash contextMenuControls controls dMenu versioned (Focus focus') path' x
                                 _ ->
-                                  NodeType.withNodeType nt
-                                    (renderNodeHash contextMenuControls controls dMenu versioned NoFocus path' x)
+                                  renderNodeHash contextMenuControls controls dMenu versioned NoFocus path' x
+                      )
+                      (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
+                  syntaxRParen mempty
+                  pure nodes
+              pure
+                ( leftmost $ (\(a, _, _) -> a) <$> nodes
+                , foldMap (\(_, a, _) -> a) nodes
+                , asum $ (\(_, _, a) -> a) <$> nodes
+                )
+            NParams xs -> do
+              nodes <-
+                syntaxInline mempty $ do
+                  syntaxLParen mempty
+                  nodes <-
+                    traverse
+                      (\item ->
+                        case item of
+                          Nothing ->
+                            (never, mempty, Nothing) <$ syntaxComma mempty
+                          Just (ix, x) ->
+                            let
+                              path' = Path.snoc path (Params_Index ix)
+                            in
+                              case focus of
+                                Focus (Cons (Params_Index ix') focus') | ix == ix' ->
+                                  renderNodeHash contextMenuControls controls dMenu versioned (Focus focus') path' x
+                                _ ->
+                                  renderNodeHash contextMenuControls controls dMenu versioned NoFocus path' x
                       )
                       (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
                   syntaxRParen mempty

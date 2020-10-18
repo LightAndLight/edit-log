@@ -251,7 +251,7 @@ searchTreeForwardList _Ctor _Level ix v context path node =
       in
         case suffix of
           (_, x) : rest ->
-            searchTreeForward (Path.snoc context $ review _Level ix) path x <>
+            searchTreeForward v (Path.snoc context $ review _Level ix) path x <>
             fmap (\(ix', x') -> SearchEntry (Path.snoc context $ review _Level ix') x') rest
           [] -> []
     Nothing -> []
@@ -259,7 +259,7 @@ searchTreeForwardList _Ctor _Level ix v context path node =
 nextHole :: forall a b. Versioned a -> Path a b -> Maybe (Focus a)
 nextHole v focusPath = do
   let Identity (h, _) = runVersionedT v Versioned.getRoot
-  let tree = searchTreeForward Nil focusPath h
+  let tree = searchTreeForward v Nil focusPath h
   getAlt $ foldMap (\(SearchEntry sPath sH) -> Alt $ findNextHole v sPath sH) tree
 
 findPrevHole :: Versioned a -> Path x y -> Hash y -> Maybe (Focus x)
@@ -305,27 +305,27 @@ findPrevHole v = go
           foldMap
             (\(ix, st) -> Alt $ go (Path.snoc path $ Block_Index ix) st)
             (reverse . zip [0..] $ NonEmpty.toList sts)
-        NArgs xs -> findPrevHoleList _Args_Index versioned path xs
-        NParams xs -> findPrevHoleList _Params_Index versioned path xs
+        NArgs xs -> findPrevHoleList _Args_Index v path xs
+        NParams xs -> findPrevHoleList _Params_Index v path xs
         NIdent{} -> Nothing
         NSHole -> Just $ Focus path
         NEHole -> Just $ Focus path
         NIHole -> Just $ Focus path
 
 findPrevHoleList ::
-  Prism' (Level x y) Int ->
+  Prism' (Level y z) Int ->
   Versioned a ->
-  Path a x ->
-  [Hash y] ->
-  Maybe (Focus a)
+  Path x y ->
+  [Hash z] ->
+  Maybe (Focus x)
 findPrevHoleList _Level versioned path xs =
   getAlt $
   foldMap
-    (\(ix, x) -> Alt $ go (Path.snoc path $ review _Level ix) x)
+    (\(ix, x) -> Alt $ findPrevHole versioned (Path.snoc path $ review _Level ix) x)
     (reverse $ zip [0..] xs)
 
-searchTreeBackward :: forall a x y. Path a x -> Path x y -> Hash x -> [SearchEntry a]
-searchTreeBackward context path h =
+searchTreeBackward :: forall a x y. Versioned a -> Path a x -> Path x y -> Hash x -> [SearchEntry a]
+searchTreeBackward v context path h =
   let Identity (mNode, _) = runVersionedT v $ Store.lookupNode h in
   case path of
     Nil ->
@@ -344,18 +344,18 @@ searchTreeBackward context path h =
             For_Ident ->
               case node of
                 NFor ident _ _ ->
-                  searchTreeBackward (Path.snoc context For_Ident) path' ident
+                  searchTreeBackward v (Path.snoc context For_Ident) path' ident
                 _ -> []
             For_Expr ->
               case node of
                 NFor ident expr _ ->
-                  searchTreeBackward (Path.snoc context For_Expr) path' expr <>
+                  searchTreeBackward v (Path.snoc context For_Expr) path' expr <>
                   [ SearchEntry (Path.snoc context For_Ident) ident ]
                 _ -> []
             For_Block ->
               case node of
                 NFor ident expr body ->
-                  searchTreeBackward (Path.snoc context For_Block) path' body <>
+                  searchTreeBackward v (Path.snoc context For_Block) path' body <>
                   [ SearchEntry (Path.snoc context For_Expr) expr
                   , SearchEntry (Path.snoc context For_Ident) ident
                   ]
@@ -363,29 +363,29 @@ searchTreeBackward context path h =
             IfThen_Cond ->
               case node of
                 NIfThen cond _ ->
-                  searchTreeBackward (Path.snoc context IfThen_Cond) path' cond
+                  searchTreeBackward v (Path.snoc context IfThen_Cond) path' cond
                 _ -> []
             IfThen_Then ->
               case node of
                 NIfThen cond then_ ->
-                  searchTreeBackward (Path.snoc context IfThen_Then) path' then_ <>
+                  searchTreeBackward v (Path.snoc context IfThen_Then) path' then_ <>
                   [ SearchEntry (Path.snoc context IfThen_Cond) cond ]
                 _ -> []
             IfThenElse_Cond ->
               case node of
                 NIfThenElse cond _ _ ->
-                  searchTreeBackward (Path.snoc context IfThenElse_Cond) path' cond
+                  searchTreeBackward v (Path.snoc context IfThenElse_Cond) path' cond
                 _ -> []
             IfThenElse_Then ->
               case node of
                 NIfThenElse cond then_ _ ->
-                  searchTreeBackward (Path.snoc context IfThenElse_Then) path' then_ <>
+                  searchTreeBackward v (Path.snoc context IfThenElse_Then) path' then_ <>
                   [ SearchEntry (Path.snoc context IfThenElse_Cond) cond ]
                 _ -> []
             IfThenElse_Else ->
               case node of
                 NIfThenElse cond then_ else_->
-                  searchTreeBackward (Path.snoc context IfThenElse_Else) path' else_ <>
+                  searchTreeBackward v (Path.snoc context IfThenElse_Else) path' else_ <>
                   [ SearchEntry (Path.snoc context IfThenElse_Then) then_
                   , SearchEntry (Path.snoc context IfThenElse_Cond) cond
                   ]
@@ -393,28 +393,28 @@ searchTreeBackward context path h =
             Print_Value ->
               case node of
                 NPrint val ->
-                  searchTreeBackward (Path.snoc context Print_Value) path' val
+                  searchTreeBackward v (Path.snoc context Print_Value) path' val
                 _ -> []
             Return_Value ->
               case node of
                 NReturn val ->
-                  searchTreeBackward (Path.snoc context Return_Value) path' val
+                  searchTreeBackward v (Path.snoc context Return_Value) path' val
                 _ -> []
             Def_Name ->
               case node of
                 NDef name _ _ ->
-                  searchTreeBackward (Path.snoc context Def_Name) path' name
+                  searchTreeBackward v (Path.snoc context Def_Name) path' name
                 _ -> []
             Def_Args ->
               case node of
                 NDef name args _ ->
-                  searchTreeBackward (Path.snoc context Def_Args) path' args <>
+                  searchTreeBackward v (Path.snoc context Def_Args) path' args <>
                   [ SearchEntry (Path.snoc context Def_Name) name ]
                 _ -> []
             Def_Body ->
               case node of
                 NDef name args body ->
-                  searchTreeBackward (Path.snoc context Def_Body) path' body <>
+                  searchTreeBackward v (Path.snoc context Def_Body) path' body <>
                   [ SearchEntry (Path.snoc context Def_Args) args
                   , SearchEntry (Path.snoc context Def_Name) name
                   ]
@@ -422,28 +422,28 @@ searchTreeBackward context path h =
             BinOp_Left ->
               case node of
                 NBinOp _ left _ ->
-                  searchTreeBackward (Path.snoc context BinOp_Left) path' left
+                  searchTreeBackward v (Path.snoc context BinOp_Left) path' left
                 _ -> []
             BinOp_Right ->
               case node of
                 NBinOp _ left right->
-                  searchTreeBackward (Path.snoc context BinOp_Right) path' right <>
+                  searchTreeBackward v (Path.snoc context BinOp_Right) path' right <>
                   [ SearchEntry (Path.snoc context BinOp_Left) left ]
                 _ -> []
             UnOp_Value ->
               case node of
                 NUnOp _ val ->
-                  searchTreeBackward (Path.snoc context UnOp_Value) path' val
+                  searchTreeBackward v (Path.snoc context UnOp_Value) path' val
                 _ -> []
             Call_Function ->
               case node of
                 NCall func _ ->
-                  searchTreeBackward (Path.snoc context Call_Function) path' func
+                  searchTreeBackward v (Path.snoc context Call_Function) path' func
                 _ -> []
             Call_Args ->
               case node of
                 NCall func args->
-                  searchTreeBackward (Path.snoc context Call_Args) path' args <>
+                  searchTreeBackward v (Path.snoc context Call_Args) path' args <>
                   [ SearchEntry (Path.snoc context Call_Function) func ]
                 _ -> []
             Block_Index ix ->
@@ -454,23 +454,25 @@ searchTreeBackward context path h =
                   in
                     case suffix of
                       (_, st) : _ ->
-                        searchTreeBackward (Path.snoc context $ Block_Index ix) path' st <>
+                        searchTreeBackward v (Path.snoc context $ Block_Index ix) path' st <>
                         fmap (\(ix', st') -> SearchEntry (Path.snoc context $ Block_Index ix') st') prefix
                       [] -> []
             Args_Index ix ->
-              searchTreeBackward _NArgs _Args_Index context path' node
+              searchTreeBackwardList _NArgs _Args_Index ix v context path' node
             Params_Index ix ->
-              searchTreeBackward _NParams _Params_Index context path' node
+              searchTreeBackwardList _NParams _Params_Index ix v context path' node
 
 searchTreeBackwardList ::
   forall a x y z.
   Prism' (Node x) [Hash y] ->
   Prism' (Level x y) Int ->
+  Int ->
+  Versioned a ->
   Path a x ->
   Path y z ->
   Node x ->
   [SearchEntry a]
-searchTreeBackwardList _Ctor _Level context path node =
+searchTreeBackwardList _Ctor _Level ix v context path node =
   case node ^? _Ctor of
     Just xs ->
       let
@@ -478,12 +480,13 @@ searchTreeBackwardList _Ctor _Level context path node =
       in
         case suffix of
           (_, x) : _ ->
-            searchTreeBackward (Path.snoc context $ review _Level ix) path' x <>
+            searchTreeBackward v (Path.snoc context $ review _Level ix) path x <>
             fmap (\(ix', x') -> SearchEntry (Path.snoc context $ review _Level ix') x') prefix
           [] -> []
+    Nothing -> []
 
 prevHole :: forall a b. Versioned a -> Path a b -> Maybe (Focus a)
 prevHole v focusPath = do
   let Identity (h, _) = runVersionedT v Versioned.getRoot
-  let tree = searchTreeBackward Nil focusPath h
+  let tree = searchTreeBackward v Nil focusPath h
   getAlt $ foldMap (\(SearchEntry sPath sH) -> Alt $ findPrevHole v sPath sH) tree
