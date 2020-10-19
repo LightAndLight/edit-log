@@ -58,7 +58,7 @@ expr = orOp
     call =
       (\e -> maybe e (Call e)) <$>
       atom <*>
-      optional args
+      optional (parens args)
 
     atom =
       token $
@@ -119,14 +119,17 @@ simpleStatement =
     defSt =
       (\n as -> Def n as . Block . pure) <$ token (string "def") <*>
       token ident <*>
-      params <*>
+      parens params <*>
       simpleStatement
 
+parens :: CharParsing m => m a -> m a
+parens = between (token $ char '(') (token $ char ')')
+
 args :: CharParsing m => m Args
-args = Args <$> between (token $ char '(') (token $ char ')') (list expr)
+args = Args <$> list expr
 
 params :: CharParsing m => m Params
-params = Params <$> between (token $ char '(') (token $ char ')') (list ident)
+params = Params <$> list ident
 
 list :: CharParsing m => m a -> m [a]
 list ma = (ma `sepBy` token (char ','))
