@@ -5,6 +5,7 @@ import Test.Hspec
 import Test.Diff.SequenceDiff (sequenceDiffSpec)
 import Test.Hash (hashSpec)
 import Test.NodeType (nodeTypeSpec)
+import Test.Path.Trie (trieSpec)
 import Test.Store.Pure (storePureSpec)
 
 import qualified Store
@@ -16,6 +17,7 @@ main =
     nodeTypeSpec
     storePureSpec
     sequenceDiffSpec
+    trieSpec
     describe "Store.insertAll" $ do
       it "insertAll [(0, [x, y])] [a, b] = [x, y, a, b]" $ do
         Store.insertAll '_' [(0, "xy")] "ab" `shouldBe` "xyab"

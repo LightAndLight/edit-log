@@ -1,3 +1,4 @@
+{-# language FlexibleInstances, MultiParamTypeClasses, TypeFamilies #-}
 {-# language GADTs, KindSignatures #-}
 {-# language LambdaCase #-}
 {-# language RankNTypes #-}
@@ -13,7 +14,10 @@ import Control.Lens.Prism (Prism')
 import Control.Lens.Review (review)
 import Control.Lens.TH (makePrisms)
 import Control.Monad (guard)
+import Data.Constraint.Extras.TH (deriveArgDict)
 import Data.Functor.Identity (Identity(..))
+import Data.GADT.Compare (GEq(..), GCompare(..), GOrdering(..))
+import Data.GADT.Show (GShow(..))
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Type.Equality ((:~:)(..))
 
@@ -58,37 +62,13 @@ data Level :: * -> * -> * where
   Params_Index :: Int -> Level Params Ident
 deriving instance Show (Level a b)
 makePrisms ''Level
+deriveArgDict ''Level
 
-data Path a :: * -> * where
-  Nil :: Path a a
-  Cons :: Level a b -> Path b c -> Path a c
-deriving instance Show (Path a b)
+instance GShow (Level a) where
+  gshowsPrec = showsPrec
 
-append :: Path a b -> Path b c -> Path a c
-append p1 p2 =
-  case p1 of
-    Nil -> p2
-    Cons l p1' -> Cons l (append p1' p2)
-
-snoc :: Path a b -> Level b c -> Path a c
-snoc p l =
-  case p of
-    Nil -> Cons l Nil
-    Cons l' p' -> Cons l' (snoc p' l)
-
-eqPath :: Path a b -> Path a c -> Maybe (b :~: c)
-eqPath p1 p2 =
-  case p1 of
-    Nil ->
-      case p2 of
-        Nil -> Just Refl
-        Cons{} -> Nothing
-    Cons l p1' ->
-      case p2 of
-        Nil -> Nothing
-        Cons l' p2' -> do
-          Refl <- eqLevel l l'
-          eqPath p1' p2'
+-- type Has' Show (Level a) (Flip Trie f) =
+--   (ArgDict (ComposeC Show g) (Level a), ConstraintsFor' (Level a) Show (Flip Trie f)) 
 
 eqLevel :: Level a b -> Level a c -> Maybe (b :~: c)
 eqLevel l1 l2 =
@@ -183,6 +163,141 @@ eqLevel l1 l2 =
           guard $ n == n'
           pure Refl
         _ -> Nothing
+
+instance GEq (Level a) where
+  geq = eqLevel
+
+instance GCompare (Level a) where
+  gcompare For_Ident For_Ident = GEQ
+  gcompare For_Ident _ = GLT
+  gcompare _ For_Ident = GGT
+
+  gcompare For_Expr For_Expr = GEQ
+  gcompare For_Expr _ = GLT
+  gcompare _ For_Expr = GGT
+
+  gcompare For_Expr For_Expr = GEQ
+  gcompare For_Expr _ = GLT
+  gcompare _ For_Expr = GGT
+
+  gcompare For_Block For_Block = GEQ
+  gcompare For_Block _ = GLT
+  gcompare _ For_Block = GGT
+
+  gcompare IfThen_Cond IfThen_Cond = GEQ
+  gcompare IfThen_Cond _ = GLT
+  gcompare _ IfThen_Cond = GGT
+
+  gcompare IfThen_Then IfThen_Then = GEQ
+  gcompare IfThen_Then _ = GLT
+  gcompare _ IfThen_Then = GGT
+
+  gcompare IfThenElse_Cond IfThenElse_Cond = GEQ
+  gcompare IfThenElse_Cond _ = GLT
+  gcompare _ IfThenElse_Cond = GGT
+
+  gcompare IfThenElse_Then IfThenElse_Then = GEQ
+  gcompare IfThenElse_Then _ = GLT
+  gcompare _ IfThenElse_Then = GGT
+
+  gcompare IfThenElse_Else IfThenElse_Else = GEQ
+  gcompare IfThenElse_Else _ = GLT
+  gcompare _ IfThenElse_Else = GGT
+
+  gcompare Print_Value Print_Value = GEQ
+  gcompare Print_Value _ = GLT
+  gcompare _ Print_Value = GGT
+
+  gcompare Return_Value Return_Value = GEQ
+  gcompare Return_Value _ = GLT
+  gcompare _ Return_Value = GGT
+
+  gcompare Def_Name Def_Name = GEQ
+  gcompare Def_Name _ = GLT
+  gcompare _ Def_Name = GGT
+
+  gcompare Def_Args Def_Args = GEQ
+  gcompare Def_Args _ = GLT
+  gcompare _ Def_Args = GGT
+
+  gcompare Def_Body Def_Body = GEQ
+  gcompare Def_Body _ = GLT
+  gcompare _ Def_Body = GGT
+
+  gcompare BinOp_Left BinOp_Left = GEQ
+  gcompare BinOp_Left _ = GLT
+  gcompare _ BinOp_Left = GGT
+
+  gcompare BinOp_Right BinOp_Right = GEQ
+  gcompare BinOp_Right _ = GLT
+  gcompare _ BinOp_Right = GGT
+
+  gcompare UnOp_Value UnOp_Value = GEQ
+  gcompare UnOp_Value _ = GLT
+  gcompare _ UnOp_Value = GGT
+
+  gcompare Call_Function Call_Function = GEQ
+  gcompare Call_Function _ = GLT
+  gcompare _ Call_Function = GGT
+
+  gcompare Call_Args Call_Args = GEQ
+  gcompare Call_Args _ = GLT
+  gcompare _ Call_Args = GGT
+
+  gcompare (Block_Index ix) (Block_Index ix') =
+    case compare ix ix' of
+      LT -> GLT
+      EQ -> GEQ
+      GT -> GGT
+  gcompare Block_Index{} _ = GLT
+  gcompare _ Block_Index{} = GGT
+
+  gcompare (Args_Index ix) (Args_Index ix') =
+    case compare ix ix' of
+      LT -> GLT
+      EQ -> GEQ
+      GT -> GGT
+  gcompare Args_Index{} _ = GLT
+  gcompare _ Args_Index{} = GGT
+
+  gcompare (Params_Index ix) (Params_Index ix') =
+    case compare ix ix' of
+      LT -> GLT
+      EQ -> GEQ
+      GT -> GGT
+  gcompare Params_Index{} _ = GLT
+  gcompare _ Params_Index{} = GGT
+
+data Path a :: * -> * where
+  Nil :: Path a a
+  Cons :: Level a b -> Path b c -> Path a c
+deriving instance Show (Path a b)
+
+append :: Path a b -> Path b c -> Path a c
+append p1 p2 =
+  case p1 of
+    Nil -> p2
+    Cons l p1' -> Cons l (append p1' p2)
+
+snoc :: Path a b -> Level b c -> Path a c
+snoc p l =
+  case p of
+    Nil -> Cons l Nil
+    Cons l' p' -> Cons l' (snoc p' l)
+
+eqPath :: Path a b -> Path a c -> Maybe (b :~: c)
+eqPath p1 p2 =
+  case p1 of
+    Nil ->
+      case p2 of
+        Nil -> Just Refl
+        Cons{} -> Nothing
+    Cons l p1' ->
+      case p2 of
+        Nil -> Nothing
+        Cons l' p2' -> do
+          Refl <- eqLevel l l'
+          eqPath p1' p2'
 
 traversal :: Path a b -> forall f. Applicative f => (b -> f b) -> a -> f a
 traversal p f a =

@@ -25,6 +25,8 @@ library
                      , NodeType
                      , Parser
                      , Path
+                     , Path.Trie
+                     , Path.Trie.Internal
                      , Session
                      , Session.Pure
                      , Store
@@ -34,7 +36,10 @@ library
                      , Versioned
                      , Versioned.Pure
   build-depends:       base ^>=4.12.0.0
+                     , bifunctors
+                     , constraints-extras
                      , containers
+                     , dependent-map
                      , dependent-sum
                      , dependent-sum-template
                      , hashable
@@ -63,14 +68,19 @@ test-suite edit-log-core-test
                        Gen.Ident
                      , Gen.Node
                      , Gen.NodeType
+                     , Gen.Path
+                     , Gen.Path.Trie
                      , Gen.Syntax
                      , Test.Diff.SequenceDiff
                      , Test.Hash
                      , Test.NodeType
+                     , Test.Path.Trie
                      , Test.Store.Pure
   main-is:             Main.hs
   build-depends:       base ^>=4.12.0.0
                      , edit-log-core
+                     , bifunctors
+                     , dependent-map
                      , dependent-sum
                      , hspec
                      , hspec-hedgehog

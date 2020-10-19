@@ -16,7 +16,7 @@ data Ident
 instance Hashable Ident
 
 newtype Params = Params [Ident]
-  deriving Show
+  deriving (Eq, Show)
 makePrisms ''Params
 
 data Statement
@@ -27,11 +27,11 @@ data Statement
   | Return Expr
   | Def Ident Params Block
   | SHole
-  deriving Show
+  deriving (Eq, Show)
 
 newtype Block
   = Block (NonEmpty Statement)
-  deriving Show
+  deriving (Eq, Show)
 
 data BinOp
   = Add
@@ -54,7 +54,7 @@ data UnOp
 instance Hashable UnOp
 
 newtype Args = Args [Expr]
-  deriving Show
+  deriving (Eq, Show)
 
 data Expr
   = Bool Bool
@@ -64,6 +64,6 @@ data Expr
   | Call Expr Args
   | EIdent String
   | EHole
-  deriving Show
+  deriving (Eq, Show)
 
 makePrisms ''Args

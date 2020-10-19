@@ -64,3 +64,13 @@ showingNodeType nt k =
     TIdent -> k
     TArgs -> k
     TParams -> k
+
+eqingNodeType :: NodeType a -> (Eq a => r) -> r
+eqingNodeType nt k =
+  case nt of
+    TExpr -> k
+    TStatement -> k
+    TBlock -> k
+    TIdent -> k
+    TArgs -> k
+    TParams -> k
