@@ -282,6 +282,21 @@ editor initial initialFocus = do
         eNode
 
     let
+      renderNodeEnv =
+        RenderNodeEnv
+        { _rnContextMenuControls = contextMenuControls
+        , _rnNodeControls = nodeControls
+        , _rnMenu = dMenu
+        , _rnErrors = dErrors
+        , _rnVersioned = dVersioned
+        , _rnFocus = dFocus
+        , _rnPath = Nil
+        }
+
+      dRootHash =
+        (\versioned -> let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot in rooth) <$>
+        dVersioned
+
       dRenderNodeHash ::
         Dynamic t
           (m
@@ -290,28 +305,16 @@ editor initial initialFocus = do
              )
           )
       dRenderNodeHash =
-        (\versioned -> do
-          let
-            Identity (rooth, _) = runVersionedT versioned Versioned.getRoot
-            renderNodeEnv =
-              RenderNodeEnv
-              { _rnContextMenuControls = contextMenuControls
-              , _rnNodeControls = nodeControls
-              , _rnMenu = dMenu
-              , _rnErrors = dErrors
-              , _rnVersioned = versioned
-              , _rnFocus = dFocus
-              , _rnPath = Nil
-              }
+        (\rootHash -> do
           ((), dRenderNodeInfo) <-
             runDynamicWriterT . flip runReaderT renderNodeEnv $
-            renderNodeHash rooth
+            renderNodeHash rootHash
           pure
             ( switchDyn $ view rniNodeEvent <$> dRenderNodeInfo
             , dRenderNodeInfo >>= view rniFocusElement
             )
         ) <$>
-        dVersioned
+        dRootHash
 
     dRenderNodeHash' ::
       Dynamic t

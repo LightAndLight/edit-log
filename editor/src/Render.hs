@@ -81,6 +81,16 @@ syntaxNodeD' ::
   m (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a)
 syntaxNodeD' attrs = Dom.elDynAttr' "div" . fmap unAttrs $ ("class" =: "syntax-node" <>) <$> attrs
 
+dynSyntaxNodeD' ::
+  (DomBuilder t m, PostBuild t m, MonadHold t m) =>
+  Dynamic t Attrs ->
+  Dynamic t (m a) ->
+  m (Dynamic t (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a))
+dynSyntaxNodeD' attrs dInput =
+  Dom.widgetHold
+    (syntaxNodeD' attrs =<< sample (current dInput))
+    (syntaxNodeD' attrs <$> updated dInput)
+
 syntaxKeyword :: DomBuilder t m => Attrs -> m a -> m a
 syntaxKeyword attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-keyword" <> attrs
 
@@ -181,7 +191,7 @@ data RenderNodeEnv t a b
   , _rnNodeControls :: NodeControls t
   , _rnMenu :: Dynamic t Menu
   , _rnErrors :: Dynamic t (Trie b CheckError)
-  , _rnVersioned :: Versioned a
+  , _rnVersioned :: Dynamic t (Versioned a)
   , _rnFocus :: Dynamic t (Focus b)
   , _rnPath :: Path a b
   }
@@ -215,13 +225,15 @@ renderNodeHash ::
 renderNodeHash h = do
   dError :: Dynamic t (Maybe (CheckError b)) <- views rnErrors $ fmap Trie.current
 
-  dInFocus <- views rnFocus $ fmap (\case; Focus Nil -> True; _ -> False)
+  dInFocus <-
+    holdUniqDyn =<<
+    views rnFocus (fmap (\case; Focus Nil -> True; _ -> False))
 
   rec
     let
-      eMouseenter = Dom.domEvent Dom.Mouseenter nodeElement
-      eMouseleave = Dom.domEvent Dom.Mouseleave nodeElement
-      eMousedown = Dom.domEvent Dom.Mousedown nodeElement
+      eMouseenter = switchDyn $ Dom.domEvent Dom.Mouseenter <$> dNodeElement
+      eMouseleave = switchDyn $ Dom.domEvent Dom.Mouseleave <$> dNodeElement
+      eMousedown = switchDyn $ Dom.domEvent Dom.Mousedown <$> dNodeElement
 
       dChildHovered =
         dRenderNodeInfo >>= view (rniNodeInfo.niHovered)
@@ -231,23 +243,30 @@ renderNodeHash h = do
         TBlock -> pure dChildHovered
         _ -> holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
     dHovered <-
-      holdUniqDyn $
       case nodeType @b of
-        TBlock -> pure False
+        TBlock -> pure $ constDyn False
         _ ->
+          holdUniqDyn $
           (\inFocus inside children -> inside && not children && not inFocus) <$>
           dInFocus <*>
           dMouseInside <*>
           dChildHovered
 
-    let
-      eClicked = gate (current dHovered) eMousedown
+    let eClicked = gate (current dHovered) eMousedown
 
-    versioned <- view rnVersioned
-    let Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
-    (nodeElement, dRenderNodeInfo) <-
+    dVersioned <- view rnVersioned
+    let
+      dmNode =
+        (\versioned ->
+            let
+              Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
+            in
+              mNode
+        ) <$>
+        dVersioned
+    (dNodeElement, dRenderNodeInfo) <-
       runDynamicWriterT $
-      renderNode dInFocus dError dHovered mNode
+      renderNode dInFocus dError dHovered dmNode
 
   let
     nodeInfo =
@@ -263,7 +282,6 @@ renderNodeHash h = do
         (\(inFocus, menu) () -> if inFocus && menu == MenuClosed then Just OpenMenu else Nothing)
         ((,) <$> current dInFocus <*> current dMenu)
         (ncOpenMenu controls)
-
 
   tellDyn dRenderNodeInfo
 
@@ -281,7 +299,8 @@ renderNodeHash h = do
   scribeDyn @t @(RenderNodeInfo t a) rniNodeInfo $ pure nodeInfo
 
   scribeDyn @t @(RenderNodeInfo t a) rniFocusElement . pure $
-    (\inFocus -> if inFocus then Just nodeElement else Nothing) <$>
+    (\nodeElement inFocus -> if inFocus then Just nodeElement else Nothing) <$>
+    dNodeElement <*>
     dInFocus
 
 down ::
@@ -330,27 +349,31 @@ renderNode ::
   Dynamic t Bool ->
   Dynamic t (Maybe (CheckError b)) ->
   Dynamic t Bool ->
-  Maybe (Node b) ->
-  m (Dom.Element Dom.EventResult GhcjsDomSpace t)
-renderNode dInFocus dError dHovered mNode = do
+  Dynamic t (Maybe (Node b)) ->
+  m (Dynamic t (Dom.Element Dom.EventResult GhcjsDomSpace t))
+renderNode dInFocus dError dHovered dmNode = do
   let
     dAttrs =
-      (pure $
-        if Maybe.maybe False isHole mNode
-        then "class" =: "syntax-hole"
-        else
-          case nodeType @b of
-            TExpr -> "class" =: "syntax-expr"
-            TBlock -> "class" =: "syntax-block"
-            TStatement -> "class" =: "syntax-statement"
-            TIdent -> "class" =: "syntax-ident"
-            TArgs -> "class" =: "syntax-args"
-            TParams -> "class" =: "syntax-params"
-      ) <>
+      fmap
+        (\mNode ->
+            if Maybe.maybe False isHole mNode
+            then "class" =: "syntax-hole"
+            else
+              case nodeType @b of
+                TExpr -> "class" =: "syntax-expr"
+                TBlock -> "class" =: "syntax-block"
+                TStatement -> "class" =: "syntax-statement"
+                TIdent -> "class" =: "syntax-ident"
+                TArgs -> "class" =: "syntax-args"
+                TParams -> "class" =: "syntax-params"
+        )
+        dmNode <>
       fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
       fmap (\mError -> case mError of; Nothing -> mempty; Just _ -> "class" =: "has-error") dError <>
       fmap (\inFocus -> if inFocus then "class" =: "syntax-focused" else mempty) dInFocus
-  fmap fst . syntaxNodeD' dAttrs $
+  (fmap.fmap) fst . dynSyntaxNodeD' dAttrs $
+    dmNode <&>
+    \mNode ->
     case mNode of
       Nothing ->
         Dom.text "error: missing node"
