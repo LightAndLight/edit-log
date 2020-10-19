@@ -8,7 +8,6 @@ module Check
   , newCheckEnv
   , CheckState
   , newCheckState
-  , CheckErrorEntry(..)
   , CheckError(..)
   , runCheckT
   , check
@@ -16,7 +15,7 @@ module Check
 where
 
 import Control.Lens.Getter ((^.), view, to)
-import Control.Lens.Setter ((<>=), locally)
+import Control.Lens.Setter ((%=), locally)
 import Control.Lens.TH (makeLenses)
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Trans.Class (MonadTrans(..))
@@ -31,6 +30,8 @@ import qualified Data.Map as Map
 import Hash (Hash)
 import Node (Node(..))
 import Path (Path, Level(..))
+import Path.Trie (Trie)
+import qualified Path.Trie as Trie
 import qualified Path
 import Store (MonadStore)
 import qualified Store
@@ -55,24 +56,20 @@ newCheckEnv =
   { _ceScope = mempty
   }
 
-data CheckErrorEntry a where
-  CheckErrorEntry :: Path a b -> CheckError b -> CheckErrorEntry a
-deriving instance Show (CheckErrorEntry a)
-
 data CheckError :: * -> * where
   NotInScope :: String -> CheckError Expr
 deriving instance Show (CheckError a)
 
 data CheckState a
   = CheckState
-  { _csErrors :: [CheckErrorEntry a]
+  { _csErrors :: Trie a CheckError
   }
 makeLenses ''CheckState
 
 newCheckState :: CheckState a
 newCheckState =
   CheckState
-  { _csErrors = []
+  { _csErrors = Trie.empty
   }
 
 newtype CheckT a m x
@@ -103,23 +100,24 @@ lookupScopeEntry k = CheckT $ view (ceScope.to (Map.lookup k))
 
 checkError :: Monad m => Path a b -> CheckError b -> CheckT a m ()
 checkError path err =
-  CheckT $ csErrors <>= [CheckErrorEntry path err]
+  CheckT $ csErrors %= Trie.insert path err
 
 runCheckT ::
   Monad m =>
   CheckEnv ->
   CheckState a ->
   CheckT a m x ->
-  m (Either [CheckErrorEntry a] x)
+  m (Either (Trie a CheckError) x)
 runCheckT env state m = do
   (mRes, state') <- flip runStateT state . flip runReaderT env . runMaybeT $ unCheckT m
   pure $ case mRes of
     Nothing ->
       Left $ state' ^. csErrors
     Just a ->
-      case state' ^. csErrors of
-        [] -> Right a
-        errs -> Left errs
+      let errs = state' ^. csErrors in
+      if Trie.null errs
+      then Right a
+      else Left errs
 
 check :: MonadStore m => Path a b -> Hash b -> CheckT a m ()
 check path hash = do

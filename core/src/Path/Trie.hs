@@ -4,11 +4,13 @@ module Path.Trie
   , empty
   , insert
   , lookup
+  , current
   , down
+  , null
   )
 where
 
-import Prelude hiding (lookup)
+import Prelude hiding (lookup, null)
 import Data.Bifunctor.Flip (Flip(..))
 import qualified Data.Dependent.Map as DMap
 
@@ -44,3 +46,12 @@ lookup path (Trie mVal levels) =
 
 down :: Level a b -> Trie a f -> Maybe (Trie b f)
 down level (Trie _ levels) = runFlip <$> DMap.lookup level levels
+
+null :: Trie a f -> Bool
+null (Trie mVal levels) =
+  case mVal of
+    Nothing -> DMap.null levels
+    Just{} -> False
+
+current :: Trie a f -> Maybe (f a)
+current (Trie mVal _) = mVal
