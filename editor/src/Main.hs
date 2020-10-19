@@ -8,6 +8,7 @@
 {-# language TypeApplications #-}
 module Main where
 
+import Control.Lens.Getter (view)
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (runReaderT)
@@ -41,7 +42,11 @@ import Versioned.Pure (Versioned, runVersionedT, newVersioned)
 import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..), renderContextMenu)
 import Focus (Focus(..))
 import Navigation (nextHole, prevHole)
-import Render (NodeControls(..), NodeEvent(..), RenderNodeEnv(..), renderNodeHash)
+import Render
+  ( NodeControls(..), NodeEvent(..), RenderNodeEnv(..)
+  , rniNodeEvent, rniFocusElement
+  , renderNodeHash
+  )
 
 data DocumentKeys t
   = DocumentKeys
@@ -277,9 +282,15 @@ editor initial initialFocus = do
         eNode
 
     let
-      dRenderNodeHash :: Dynamic t (m (Event t (NodeEvent a), Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)))
+      dRenderNodeHash ::
+        Dynamic t
+          (m
+             ( Event t (NodeEvent a)
+             , Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
+             )
+          )
       dRenderNodeHash =
-        (\versioned focus -> do
+        (\versioned -> do
           let
             Identity (rooth, _) = runVersionedT versioned Versioned.getRoot
             renderNodeEnv =
@@ -289,21 +300,29 @@ editor initial initialFocus = do
               , _rnMenu = dMenu
               , _rnErrors = dErrors
               , _rnVersioned = versioned
-              , _rnFocus = focus
+              , _rnFocus = dFocus
               , _rnPath = Nil
               }
-          (nodeEvent, _, focusNode) <- runReaderT (renderNodeHash rooth) renderNodeEnv
-          pure (nodeEvent, focusNode)
+          ((), dRenderNodeInfo) <-
+            runDynamicWriterT . flip runReaderT renderNodeEnv $
+            renderNodeHash rooth
+          pure
+            ( switchDyn $ view rniNodeEvent <$> dRenderNodeInfo
+            , dRenderNodeInfo >>= view rniFocusElement
+            )
         ) <$>
-        dVersioned <*>
-        dFocus
+        dVersioned
 
-    dRenderNodeHash' :: Dynamic t (Event t (NodeEvent a), Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)) <-
+    dRenderNodeHash' ::
+      Dynamic t
+        ( Event t (NodeEvent a)
+        , Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
+        ) <-
       Dom.widgetHold (join . sample $ current dRenderNodeHash) (updated dRenderNodeHash)
 
     let
       dFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
-      dFocusElement = snd <$> dRenderNodeHash'
+      dFocusElement = dRenderNodeHash' >>= snd
 
       eRenderNode :: Event t (NodeEvent a)
       eRenderNode = switchDyn $ fst <$> dRenderNodeHash'
