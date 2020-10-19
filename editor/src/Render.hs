@@ -371,13 +371,16 @@ renderNode dInFocus dError dHovered dmNode = do
       fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
       fmap (\mError -> case mError of; Nothing -> mempty; Just _ -> "class" =: "has-error") dError <>
       fmap (\inFocus -> if inFocus then "class" =: "syntax-focused" else mempty) dInFocus
+  dmNodeFactored <- maybeDyn dmNode
   (fmap.fmap) fst . dynSyntaxNodeD' dAttrs $
-    dmNode <&>
-    \mNode ->
-    case mNode of
+    dmNodeFactored <&>
+    \mdNode ->
+    case mdNode of
       Nothing ->
         Dom.text "error: missing node"
-      Just node ->
+      Just dNode ->
+        Dom.dyn_ @_ @_ @() $
+        dNode <&> \node ->
         case node of
           NEIdent n ->
             Dom.text (Text.pack n)

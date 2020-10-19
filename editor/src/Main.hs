@@ -251,35 +251,42 @@ editor initial initialFocus = do
          ]
         )
 
+    dRootHash <-
+      holdUniqDyn $
+      (\versioned -> let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot in rooth) <$>
+      dVersioned
+
     let
+
       dCheckResult :: Dynamic t (Either (Trie a CheckError) ())
       dCheckResult =
-        (\versioned ->
+        (\rootHash versioned ->
           let
             Identity (res, _) =
               runVersionedT versioned .
-              Check.runCheckT Check.newCheckEnv Check.newCheckState $ do
-                rootHash <- lift Versioned.getRoot
-                Check.check Nil rootHash
+              Check.runCheckT Check.newCheckEnv Check.newCheckState $
+              Check.check Nil rootHash
           in
             res
         ) <$>
+        dRootHash <*>
         dVersioned
 
       dErrors :: Dynamic t (Trie a CheckError)
       dErrors = either id (const Trie.empty) <$> dCheckResult
 
     dMenu <-
-      foldDyn
-        (\nodeEvent now ->
-          case nodeEvent of
-            CloseMenu -> MenuClosed
-            OpenMenu -> MenuOpen
-            ContextMenuEvent Choose{} -> MenuClosed
-            _ -> now
-        )
+      holdDyn
         MenuClosed
-        eNode
+        (fmapMaybe
+          (\case
+            CloseMenu -> Just MenuClosed
+            OpenMenu -> Just MenuOpen
+            ContextMenuEvent Choose{} -> Just MenuClosed
+            _ -> Nothing
+          )
+          eNode
+        )
 
     let
       renderNodeEnv =
@@ -292,10 +299,6 @@ editor initial initialFocus = do
         , _rnFocus = dFocus
         , _rnPath = Nil
         }
-
-      dRootHash =
-        (\versioned -> let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot in rooth) <$>
-        dVersioned
 
       dRenderNodeHash ::
         Dynamic t

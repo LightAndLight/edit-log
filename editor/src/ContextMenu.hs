@@ -43,7 +43,7 @@ import Focus (Focus(..))
 data Menu
   = MenuClosed
   | MenuOpen
-  deriving Eq
+  deriving (Eq, Show)
 
 data ContextMenuControls t
   = ContextMenuControls
