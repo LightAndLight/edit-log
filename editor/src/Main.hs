@@ -10,6 +10,7 @@ module Main where
 
 import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
+import Control.Monad.Reader (runReaderT)
 import Control.Monad.Trans.Class (lift)
 import Data.Functor.Identity (Identity(..))
 import qualified Data.Maybe as Maybe
@@ -40,7 +41,7 @@ import Versioned.Pure (Versioned, runVersionedT, newVersioned)
 import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..), renderContextMenu)
 import Focus (Focus(..))
 import Navigation (nextHole, prevHole)
-import Render (NodeControls(..), NodeEvent(..), renderNodeHash)
+import Render (NodeControls(..), NodeEvent(..), RenderNodeEnv(..), renderNodeHash)
 
 data DocumentKeys t
   = DocumentKeys
@@ -279,9 +280,19 @@ editor initial initialFocus = do
       dRenderNodeHash :: Dynamic t (m (Event t (NodeEvent a), Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)))
       dRenderNodeHash =
         (\versioned focus -> do
-          let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot
-          (nodeEvent, _, focusNode) <-
-            renderNodeHash contextMenuControls nodeControls dMenu dErrors versioned focus Nil rooth
+          let
+            Identity (rooth, _) = runVersionedT versioned Versioned.getRoot
+            renderNodeEnv =
+              RenderNodeEnv
+              { _rnContextMenuControls = contextMenuControls
+              , _rnNodeControls = nodeControls
+              , _rnMenu = dMenu
+              , _rnErrors = dErrors
+              , _rnVersioned = versioned
+              , _rnFocus = focus
+              , _rnPath = Nil
+              }
+          (nodeEvent, _, focusNode) <- runReaderT (renderNodeHash rooth) renderNodeEnv
           pure (nodeEvent, focusNode)
         ) <$>
         dVersioned <*>

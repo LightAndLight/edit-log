@@ -1,10 +1,16 @@
 {-# language FlexibleContexts #-}
+{-# language FlexibleInstances, FunctionalDependencies, MultiParamTypeClasses #-}
 {-# language GADTs #-}
+{-# language LambdaCase #-}
 {-# language OverloadedStrings #-}
+{-# language RankNTypes #-}
 {-# language RecursiveDo #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
+{-# language TemplateHaskell #-}
+{-# language TypeOperators #-}
 module Render
   ( NodeControls(..), NodeEvent(..), NodeInfo(..)
+  , RenderNodeEnv(..)
   , renderNodeHash
   , syntaxNode
   , syntaxNode'
@@ -12,13 +18,17 @@ module Render
 where
 
 import Control.Applicative ((<|>))
+import Control.Lens.Getter ((^.), view, views)
+import Control.Lens.TH (makeClassy)
 import Control.Monad.Fix (MonadFix)
+import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, ask)
 import Data.Foldable (asum)
 import Data.Functor.Identity (Identity(..))
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Maybe as Maybe
 import qualified Data.Text as Text
+import Data.Type.Equality ((:~:)(..))
 import Language.Javascript.JSaddle.Monad (MonadJSM)
 import Reflex
 import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace)
@@ -135,44 +145,45 @@ instance Reflex t => Semigroup (NodeInfo t) where
 instance Reflex t => Monoid (NodeInfo t) where
   mempty = NodeInfo { niHovered = pure False }
 
+data RenderNodeEnv t a b
+  = RenderNodeEnv
+  { _rnContextMenuControls :: ContextMenuControls t
+  , _rnNodeControls :: NodeControls t
+  , _rnMenu :: Dynamic t Menu
+  , _rnErrors :: Dynamic t (Trie b CheckError)
+  , _rnVersioned :: Versioned a
+  , _rnFocus :: Focus b
+  , _rnPath :: Path a b
+  }
+makeClassy ''RenderNodeEnv
+
 renderNodeHash ::
-  forall t m a b.
+  forall t m a b r.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
   , PerformEvent t m, MonadJSM (Performable m)
   , DomBuilderSpace m ~ GhcjsDomSpace
   , TriggerEvent t m
   , MonadFix m, MonadJSM m
   , KnownNodeType b
+  , HasRenderNodeEnv r t a b
+  , MonadReader r m
   ) =>
-  ContextMenuControls t ->
-  NodeControls t ->
-  Dynamic t Menu ->
-  Dynamic t (Trie b CheckError) ->
-  Versioned a ->
-  Focus b ->
-  Path a b ->
   Hash b ->
   m
     ( Event t (NodeEvent a)
     , NodeInfo t
     , Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)
     )
-renderNodeHash contextMenuControls controls dMenu dErrors versioned focus path h = do
-  rec
-    let
-      dError :: Dynamic t (Maybe (CheckError b))
-      dError = Trie.current <$> dErrors
+renderNodeHash h = do
+  dError :: Dynamic t (Maybe (CheckError b)) <- views rnErrors $ fmap Trie.current
 
+  inFocus <- views rnFocus $ \case; Focus Nil -> True; _ -> False
+
+  rec
     let
       eMouseenter = Dom.domEvent Dom.Mouseenter nodeElement
       eMouseleave = Dom.domEvent Dom.Mouseleave nodeElement
       eMousedown = Dom.domEvent Dom.Mousedown nodeElement
-
-    let
-      inFocus =
-        case focus of
-          Focus Nil -> True
-          _ -> False
 
     dMouseInside <-
       case nodeType @b of
@@ -190,9 +201,10 @@ renderNodeHash contextMenuControls controls dMenu dErrors versioned focus path h
     let
       eClicked = gate (current dHovered) eMousedown
 
+    versioned <- view rnVersioned
     let Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
     (nodeElement, (eChildren, childrenInfo, childFocus)) <-
-      renderNode controls contextMenuControls dMenu dErrors versioned focus path inFocus dError dHovered mNode
+      renderNode inFocus dError dHovered mNode
 
   let
     nodeInfo =
@@ -200,6 +212,8 @@ renderNodeHash contextMenuControls controls dMenu dErrors versioned focus path h
       { niHovered = dMouseInside
       }
 
+  dMenu <- view rnMenu
+  controls <- view rnNodeControls
   let
     eOpenMenu =
       attachWithMaybe
@@ -207,6 +221,7 @@ renderNodeHash contextMenuControls controls dMenu dErrors versioned focus path h
         (current dMenu)
         (ncOpenMenu controls)
 
+  path <- view rnPath
   pure
     ( leftmost
       [ eChildren
@@ -221,23 +236,45 @@ renderNodeHash contextMenuControls controls dMenu dErrors versioned focus path h
     , childFocus <|> (if inFocus then Just nodeElement else Nothing)
     )
 
+down ::
+  ( Monad m
+  , Reflex t
+  , HasRenderNodeEnv r t a b
+  , MonadReader r m
+  ) =>
+  (forall x y. Level x y -> Maybe (x :~: b, y :~: b')) ->
+  Level b b' ->
+  ReaderT (RenderNodeEnv t a b') m res ->
+  m res
+down match build m = do
+  env <- ask
+  runReaderT m $
+    RenderNodeEnv
+    { _rnContextMenuControls = env ^. rnContextMenuControls
+    , _rnNodeControls = env ^. rnNodeControls
+    , _rnMenu = env ^. rnMenu
+    , _rnErrors = Maybe.fromMaybe Trie.empty . Trie.down build <$> view rnErrors env
+    , _rnVersioned = env ^. rnVersioned
+    , _rnFocus =
+      case view rnFocus env of
+        Focus (Cons level focusPath) | Just (Refl, Refl) <- match level ->
+          Focus focusPath
+        _ ->
+          NoFocus
+    , _rnPath = Path.snoc (view rnPath env) build
+    }
+
 renderNode ::
-  forall t m a b.
+  forall t m a b r.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
   , PerformEvent t m, MonadJSM (Performable m)
   , DomBuilderSpace m ~ GhcjsDomSpace
   , TriggerEvent t m
   , MonadFix m, MonadJSM m
   , KnownNodeType b
+  , HasRenderNodeEnv r t a b
+  , MonadReader r m
   ) =>
-  KnownNodeType b =>
-  NodeControls t ->
-  ContextMenuControls t ->
-  Dynamic t Menu ->
-  Dynamic t (Trie b CheckError) ->
-  Versioned a ->
-  Focus b ->
-  Path a b ->
   Bool ->
   Dynamic t (Maybe (CheckError b)) ->
   Dynamic t Bool ->
@@ -246,7 +283,7 @@ renderNode ::
     ( Dom.Element Dom.EventResult GhcjsDomSpace t
     , (Event t (NodeEvent a), NodeInfo t, Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
     )
-renderNode controls contextMenuControls dMenu dErrors versioned focus path inFocus dError dHovered mNode =
+renderNode inFocus dError dHovered mNode =
   let
     dAttrs =
       (pure $
@@ -282,48 +319,24 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "for"
                   forIdent <-
-                    renderNodeHash
-                      contextMenuControls
-                      controls
-                      dMenu
-                      (Maybe.fromMaybe Trie.empty . Trie.down For_Ident <$> dErrors)
-                      versioned
-                      (case focus of
-                        Focus (Cons For_Ident focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                      )
-                      (Path.snoc path For_Ident)
-                      ident
+                    down
+                      (\case; For_Ident -> Just (Refl, Refl); _ -> Nothing)
+                      For_Ident
+                      (renderNodeHash ident)
                   syntaxKeyword mempty $ Dom.text "in"
                   forExpr <-
-                    renderNodeHash
-                      contextMenuControls
-                      controls
-                      dMenu
-                      (Maybe.fromMaybe Trie.empty . Trie.down For_Expr <$> dErrors)
-                      versioned
-                      (case focus of
-                        Focus (Cons For_Expr focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                      )
-                      (Path.snoc path For_Expr)
-                      val
+                    down
+                      (\case; For_Expr -> Just (Refl, Refl); _ -> Nothing)
+                      For_Expr
+                      (renderNodeHash val)
                   syntaxColon mempty
                   pure (forIdent, forExpr)
               (eForBlock, forBlockInfo, forBlockFocus) <-
                 syntaxNested mempty $
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down For_Block <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons For_Block focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path For_Block)
-                  body
+                down
+                  (\case; For_Block -> Just (Refl, Refl); _ -> Nothing)
+                  For_Block
+                  (renderNodeHash body)
               pure
                 ( leftmost [eForIdent, eForExpr, eForBlock]
                 , forIdentInfo <> forExprInfo <> forBlockInfo
@@ -334,34 +347,18 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "if"
                   ifThenCond <-
-                    renderNodeHash
-                      contextMenuControls
-                      controls
-                      dMenu
-                      (Maybe.fromMaybe Trie.empty . Trie.down IfThen_Cond <$> dErrors)
-                      versioned
-                      (case focus of
-                        Focus (Cons IfThen_Cond focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                      )
-                      (Path.snoc path IfThen_Cond)
-                      cond
+                    down
+                      (\case; IfThen_Cond -> Just (Refl, Refl); _ -> Nothing)
+                      IfThen_Cond
+                      (renderNodeHash cond)
                   syntaxColon mempty
                   pure ifThenCond
               (eIfThenThen, ifThenThenInfo, ifThenThenFocus) <-
                 syntaxNested mempty $
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down IfThen_Then <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons IfThen_Then focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path IfThen_Then)
-                  then_
+                down
+                  (\case; IfThen_Then -> Just (Refl, Refl); _ -> Nothing)
+                  IfThen_Then
+                  (renderNodeHash then_)
               pure
                 ( leftmost [eIfThenCond, eIfThenThen]
                 , ifThenCondInfo <> ifThenThenInfo
@@ -372,51 +369,27 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "if"
                   ifThenElseCond <-
-                    renderNodeHash
-                      contextMenuControls
-                      controls
-                      dMenu
-                      (Maybe.fromMaybe Trie.empty . Trie.down IfThenElse_Cond <$> dErrors)
-                      versioned
-                      (case focus of
-                        Focus (Cons IfThenElse_Cond focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                      )
-                      (Path.snoc path IfThenElse_Cond)
-                      cond
+                    down
+                      (\case; IfThenElse_Cond -> Just (Refl, Refl); _ -> Nothing)
+                      IfThenElse_Cond
+                      (renderNodeHash cond)
                   syntaxColon mempty
                   pure ifThenElseCond
               (eIfThenElseThen, ifThenElseThenInfo, ifThenElseThenFocus) <-
                 syntaxNested mempty $
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down IfThenElse_Then <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons IfThenElse_Then focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path IfThenElse_Then)
-                  then_
+                down
+                  (\case; IfThenElse_Then -> Just (Refl, Refl); _ -> Nothing)
+                  IfThenElse_Then
+                  (renderNodeHash then_)
               syntaxLine mempty $ do
                 syntaxKeyword mempty $ Dom.text "else"
                 syntaxColon mempty
               (eIfThenElseElse, ifThenElseElseInfo, ifThenElseElseFocus) <-
                 syntaxNested mempty $
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down IfThenElse_Else <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons IfThenElse_Else focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path IfThenElse_Else)
-                  else_
+                down
+                  (\case; IfThenElse_Else -> Just (Refl, Refl); _ -> Nothing)
+                  IfThenElse_Else
+                  (renderNodeHash else_)
               pure
                 ( leftmost [eIfThenElseCond, eIfThenElseThen, eIfThenElseElse]
                 , ifThenElseCondInfo <> ifThenElseThenInfo <> ifThenElseElseInfo
@@ -426,80 +399,40 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
               syntaxLine mempty $ do
                 syntaxKeyword mempty $ Dom.text "print"
                 syntaxColon mempty
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down Print_Value <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons Print_Value focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path Print_Value)
-                  val
+                down
+                  (\case; Print_Value -> Just (Refl, Refl); _ -> Nothing)
+                  Print_Value
+                  (renderNodeHash val)
             NReturn val ->
               syntaxLine mempty $ do
                 syntaxKeyword mempty $ Dom.text "return"
                 syntaxColon mempty
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down Return_Value <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons Return_Value focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path Return_Value)
-                  val
+                down
+                  (\case; Return_Value -> Just (Refl, Refl); _ -> Nothing)
+                  Return_Value
+                  (renderNodeHash val)
             NDef name args body -> do
               ((eDefName, defNameInfo, defNameFocus), (eDefArgs, defArgsInfo, defArgsFocus)) <-
                 syntaxLine mempty $ do
                   syntaxKeyword mempty $ Dom.text "def"
                   defName <-
-                    renderNodeHash
-                      contextMenuControls
-                      controls
-                      dMenu
-                      (Maybe.fromMaybe Trie.empty . Trie.down Def_Name <$> dErrors)
-                      versioned
-                      (case focus of
-                          Focus (Cons Def_Name focusPath) -> Focus focusPath
-                          _ -> NoFocus
-                      )
-                      (Path.snoc path Def_Name)
-                      name
+                    down
+                      (\case; Def_Name -> Just (Refl, Refl); _ -> Nothing)
+                      Def_Name
+                      (renderNodeHash name)
                   defArgs <-
-                    renderNodeHash
-                      contextMenuControls
-                      controls
-                      dMenu
-                      (Maybe.fromMaybe Trie.empty . Trie.down Def_Args <$> dErrors)
-                      versioned
-                      (case focus of
-                          Focus (Cons Def_Args focusPath) -> Focus focusPath
-                          _ -> NoFocus
-                      )
-                      (Path.snoc path Def_Args)
-                      args
+                    down
+                      (\case; Def_Args -> Just (Refl, Refl); _ -> Nothing)
+                      Def_Args
+                      (renderNodeHash args)
                   syntaxColon mempty
                   pure (defName, defArgs)
               (eDefBody, defBodyInfo, defBodyFocus) <-
                 syntaxNested mempty $
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down Def_Body <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons Def_Body focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path Def_Body)
-                  body
+                down
+                  (\case; Def_Body -> Just (Refl, Refl); _ -> Nothing)
+                  Def_Body
+                  (renderNodeHash body)
               pure
                 ( leftmost [eDefName, eDefArgs, eDefBody]
                 , defNameInfo <> defArgsInfo <> defBodyInfo
@@ -514,18 +447,10 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
             NBinOp op left right ->
               syntaxInline mempty $ do
                 (eBinOpLeft, binOpLeftInfo, binOpLeftFocus) <-
-                  renderNodeHash
-                    contextMenuControls
-                    controls
-                    dMenu
-                    (Maybe.fromMaybe Trie.empty . Trie.down BinOp_Left <$> dErrors)
-                    versioned
-                    (case focus of
-                        Focus (Cons BinOp_Left focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                    )
-                    (Path.snoc path BinOp_Left)
-                    left
+                  down
+                    (\case; BinOp_Left -> Just (Refl, Refl); _ -> Nothing)
+                    BinOp_Left
+                    (renderNodeHash left)
                 case op of
                   Add -> syntaxSymbol mempty $ Dom.text "+"
                   Sub -> syntaxSymbol mempty $ Dom.text "-"
@@ -535,18 +460,10 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
                   And -> syntaxKeyword mempty $ Dom.text "and"
                   Or -> syntaxKeyword mempty $ Dom.text "or"
                 (eBinOpRight, binOpRightInfo, binOpRightFocus) <-
-                  renderNodeHash
-                    contextMenuControls
-                    controls
-                    dMenu
-                    (Maybe.fromMaybe Trie.empty . Trie.down BinOp_Right <$> dErrors)
-                    versioned
-                    (case focus of
-                        Focus (Cons BinOp_Right focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                    )
-                    (Path.snoc path BinOp_Right)
-                    right
+                  down
+                    (\case; BinOp_Right -> Just (Refl, Refl); _ -> Nothing)
+                    BinOp_Right
+                    (renderNodeHash right)
                 pure
                   ( leftmost [eBinOpLeft, eBinOpRight]
                   , binOpLeftInfo <> binOpRightInfo
@@ -557,46 +474,22 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
                 case op of
                   Neg -> syntaxSymbol mempty $ Dom.text "-"
                   Not -> syntaxKeyword mempty $ Dom.text "not"
-                renderNodeHash
-                  contextMenuControls
-                  controls
-                  dMenu
-                  (Maybe.fromMaybe Trie.empty . Trie.down UnOp_Value <$> dErrors)
-                  versioned
-                  (case focus of
-                      Focus (Cons UnOp_Value focusPath) -> Focus focusPath
-                      _ -> NoFocus
-                  )
-                  (Path.snoc path UnOp_Value)
-                  val
+                down
+                  (\case; UnOp_Value -> Just (Refl, Refl); _ -> Nothing)
+                  UnOp_Value
+                  (renderNodeHash val)
             NCall func args ->
               syntaxInline mempty $ do
                 (eCallFunc, callFuncInfo, callFuncFocus) <-
-                  renderNodeHash
-                    contextMenuControls
-                    controls
-                    dMenu
-                    (Maybe.fromMaybe Trie.empty . Trie.down Call_Function <$> dErrors)
-                    versioned
-                    (case focus of
-                        Focus (Cons Call_Function focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                    )
-                    (Path.snoc path Call_Function)
-                    func
+                  down
+                    (\case; Call_Function -> Just (Refl, Refl); _ -> Nothing)
+                    Call_Function
+                    (renderNodeHash func)
                 (eCallArgs, callArgsInfo, callArgsFocus) <-
-                  renderNodeHash
-                    contextMenuControls
-                    controls
-                    dMenu
-                    (Maybe.fromMaybe Trie.empty . Trie.down Call_Args <$> dErrors)
-                    versioned
-                    (case focus of
-                        Focus (Cons Call_Args focusPath) -> Focus focusPath
-                        _ -> NoFocus
-                    )
-                    (Path.snoc path Call_Args)
-                    args
+                  down
+                    (\case; Call_Args -> Just (Refl, Refl); _ -> Nothing)
+                    Call_Args
+                    (renderNodeHash args)
                 pure
                   ( leftmost [eCallFunc, eCallArgs]
                   , callFuncInfo <> callArgsInfo
@@ -606,19 +499,10 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
               nodes <-
                 traverse
                   (\(ix, st) ->
-                     renderNodeHash
-                       contextMenuControls
-                       controls
-                       dMenu
-                       (Maybe.fromMaybe Trie.empty . Trie.down (Block_Index ix) <$> dErrors)
-                       versioned
-                       (case focus of
-                          Focus (Cons (Block_Index ix') focus') | ix == ix' ->
-                            Focus focus'
-                          _ -> NoFocus
-                       )
-                       (Path.snoc path $ Block_Index ix)
-                       st
+                    down
+                      (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                      (Block_Index ix)
+                      (renderNodeHash st)
                   )
                   (zip [0::Int ..] $ NonEmpty.toList sts)
               pure
@@ -637,19 +521,10 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
                           Nothing ->
                             (never, mempty, Nothing) <$ syntaxComma mempty
                           Just (ix, x) ->
-                            renderNodeHash
-                              contextMenuControls
-                              controls
-                              dMenu
-                              (Maybe.fromMaybe Trie.empty . Trie.down (Args_Index ix) <$> dErrors)
-                              versioned
-                              (case focus of
-                                  Focus (Cons (Args_Index ix') focus') | ix == ix' ->
-                                    Focus focus'
-                                  _ -> NoFocus
-                              )
-                              (Path.snoc path $ Args_Index ix)
-                              x
+                            down
+                              (\case; Args_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                              (Args_Index ix)
+                              (renderNodeHash x)
                       )
                       (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
                   syntaxRParen mempty
@@ -670,19 +545,10 @@ renderNode controls contextMenuControls dMenu dErrors versioned focus path inFoc
                           Nothing ->
                             (never, mempty, Nothing) <$ syntaxComma mempty
                           Just (ix, x) ->
-                            renderNodeHash
-                              contextMenuControls
-                              controls
-                              dMenu
-                              (Maybe.fromMaybe Trie.empty . Trie.down (Params_Index ix) <$> dErrors)
-                              versioned
-                              (case focus of
-                                  Focus (Cons (Params_Index ix') focus') | ix == ix' ->
-                                    Focus focus'
-                                  _ -> NoFocus
-                              )
-                              (Path.snoc path $ Params_Index ix)
-                              x
+                            down
+                              (\case; Params_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                              (Params_Index ix)
+                              (renderNodeHash x)
                       )
                       (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
                   syntaxRParen mempty

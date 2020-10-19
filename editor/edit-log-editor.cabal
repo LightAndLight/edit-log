@@ -23,6 +23,7 @@ library
                      , ghcjs-dom
                      , jsaddle
                      , lens
+                     , mtl
                      , reflex
                      , reflex-dom
                      , text
