@@ -356,16 +356,17 @@ renderNode dInFocus dError dHovered dmNode = do
     dAttrs =
       fmap
         (\mNode ->
-            if Maybe.maybe False isHole mNode
-            then "class" =: "syntax-hole"
-            else
-              case nodeType @b of
-                TExpr -> "class" =: "syntax-expr"
-                TBlock -> "class" =: "syntax-block"
-                TStatement -> "class" =: "syntax-statement"
-                TIdent -> "class" =: "syntax-ident"
-                TArgs -> "class" =: "syntax-args"
-                TParams -> "class" =: "syntax-params"
+            (if Maybe.maybe False isHole mNode
+             then "class" =: "syntax-hole"
+             else mempty
+            ) <>
+            case nodeType @b of
+              TExpr -> "class" =: "syntax-expr"
+              TBlock -> "class" =: "syntax-block"
+              TStatement -> "class" =: "syntax-statement"
+              TIdent -> "class" =: "syntax-ident"
+              TArgs -> "class" =: "syntax-args"
+              TParams -> "class" =: "syntax-params"
         )
         dmNode <>
       fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>

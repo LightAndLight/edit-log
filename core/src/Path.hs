@@ -279,11 +279,40 @@ append p1 p2 =
     Nil -> p2
     Cons l p1' -> Cons l (append p1' p2)
 
+data Split a b where
+  Split :: Path a x -> Path x b -> Split a b
+
+splitFromEnd :: Path a b -> Int -> Split a b
+splitFromEnd path n =
+  if n <= 0
+  then Split path Nil
+  else
+    case unsnoc path of
+      UnsnocMore prefix final ->
+        case splitFromEnd prefix (n-1) of
+          Split prefix' suffix' -> Split prefix' (snoc suffix' final)
+      UnsnocEmpty -> Split Nil Nil
+
 snoc :: Path a b -> Level b c -> Path a c
 snoc p l =
   case p of
     Nil -> Cons l Nil
     Cons l' p' -> Cons l' (snoc p' l)
+
+data Unsnoc a b where
+  UnsnocMore :: Path a x -> Level x b -> Unsnoc a b
+  UnsnocEmpty :: Unsnoc a a
+
+unsnoc :: Path a b -> Unsnoc a b
+unsnoc path =
+  case path of
+    Nil -> UnsnocEmpty
+    Cons l rest ->
+      case unsnoc rest of
+        UnsnocEmpty ->
+          UnsnocMore Nil l
+        UnsnocMore prefix final ->
+          UnsnocMore (Cons l prefix) final
 
 eqPath :: Path a b -> Path a c -> Maybe (b :~: c)
 eqPath p1 p2 =

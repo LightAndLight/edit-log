@@ -13,7 +13,10 @@ import Control.Monad (join, when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Trans.Class (lift)
+import Data.Char (isLetter)
 import Data.Functor.Identity (Identity(..))
+import Data.Functor.Misc (Const2(..))
+import qualified Data.Map as Map
 import qualified Data.Maybe as Maybe
 import qualified Data.Set as Set
 import Data.Text (Text)
@@ -31,6 +34,7 @@ import qualified Check
 import Log (Entry, Time)
 import NodeType (KnownNodeType)
 import Path (Path(..), Level(..))
+import qualified Path
 import Path.Trie (Trie)
 import qualified Path.Trie as Trie
 import Syntax (Block(..), Statement(..))
@@ -57,6 +61,7 @@ data DocumentKeys t
   , dkDown :: Event t ()
   , dkTab :: Event t ()
   , dkShiftTab :: Event t ()
+  , dkLetter :: EventSelector t (Const2 Char ())
   }
 
 data Keypress
@@ -124,10 +129,20 @@ documentKeys = do
           )
           (current dHeld)
           eKeyDown
+    , dkLetter =
+        fanMap $
+        fmapMaybe
+          (\code ->
+            case Text.uncons code of
+              Just (c, "") | isLetter c -> Just $ Map.singleton c ()
+              _ -> Nothing
+          )
+          eKeyDown
     }
 
 data EditAction a where
   Replace :: KnownNodeType b => Path a b -> b -> EditAction a
+  InsertAfter :: EditAction a
   NextHole :: EditAction a
   PrevHole :: EditAction a
   SetFocus :: Focus a -> EditAction a
@@ -143,6 +158,7 @@ data DocumentControls t
   = DocumentControls
   { dNextHole :: Event t ()
   , dPrevHole :: Event t ()
+  , dNewLine :: Event t ()
   }
 
 editor ::
@@ -179,6 +195,7 @@ editor initial initialFocus = do
       DocumentControls
       { dNextHole = dkTab keys
       , dPrevHole = dkShiftTab keys
+      , dNewLine = select (dkLetter keys) (Const2 'o')
       }
 
     initialVersioned :: Versioned a
@@ -187,12 +204,12 @@ editor initial initialFocus = do
     initialSession :: Session (Time, Entry a)
     initialSession = newSession
 
-
   rec
     let
       dMenuClosed = (MenuClosed ==) <$> current dMenu
       eNextHole = gate dMenuClosed (NextHole <$ dNextHole documentControls)
       ePrevHole = gate dMenuClosed (PrevHole <$ dPrevHole documentControls)
+      eNewLine = gate dMenuClosed (InsertAfter <$ dNewLine documentControls)
 
     (dVersioned, _dSession, dFocus) <-
       (\d -> (esVersioned <$> d, esSession <$> d, esFocus <$> d)) <$>
@@ -205,12 +222,31 @@ editor initial initialFocus = do
                   Replace path val -> do
                     _ <- Versioned.replace path val
                     pure ()
+                  InsertAfter | Focus path <- esFocus editorState ->
+                    case Path.unsnoc path of
+                      Path.UnsnocMore prefix final ->
+                        case final of
+                          Block_Index ix -> do
+                            _ <- Versioned.insert prefix (ix+1, SHole)
+                            pure ()
+                          _ -> pure ()
+                      Path.UnsnocEmpty -> pure ()
                   _ -> pure ()
               focus' =
                 case action of
                   Replace path _ ->
                     Maybe.fromMaybe (esFocus editorState) $
                     nextHole versioned' path
+                  InsertAfter ->
+                    case esFocus editorState of
+                      Focus path ->
+                        case Path.unsnoc path of
+                          Path.UnsnocMore prefix final ->
+                            case final of
+                              Block_Index ix -> Focus (Path.snoc prefix (Block_Index $ ix+1))
+                              _ -> esFocus editorState
+                          Path.UnsnocEmpty -> esFocus editorState
+                      NoFocus -> NoFocus
                   NextHole ->
                     Maybe.fromMaybe (esFocus editorState) $
                     case esFocus editorState of
@@ -248,6 +284,7 @@ editor initial initialFocus = do
              eNode
          , eNextHole
          , ePrevHole
+         , eNewLine
          ]
         )
 
@@ -406,7 +443,14 @@ main = do
          , ".syntax-statement {"
          , "  padding-left: 0.25em;"
          , "  padding-right: 0.25em;"
+         , "  margin-top: 0.25em;"
          , "  border-radius: 0.1em;"
+         , "}"
+         , ""
+         , ".syntax-statement.syntax-hole {"
+         , "  padding-left: 0em;"
+         , "  padding-right: 0em;"
+         , "  border-radius: 0em;"
          , "}"
          , ""
          , ".syntax-focused.syntax-node {"
@@ -417,11 +461,11 @@ main = do
          , "  background-color: " <> nodeHoveredBg <> ";"
          , "}"
          , ""
-         , ".syntax-focused.syntax-statement {"
+         , ".syntax-statement.syntax-focused {"
          , "  box-shadow: inset 2px 0px 0 " <> nodeActive <> ";"
          , "}"
          , ""
-         , ".syntax-hovered.syntax-statement {"
+         , ".syntax-statement.syntax-hovered {"
          , "  box-shadow: inset 2px 0px 0 " <> nodeHovered <> ";"
          , "}"
          , ""
@@ -476,6 +520,16 @@ main = do
          , "  color: " <> holeHoveredText <> ";"
          , "}"
          , ""
+         , ".syntax-statement.syntax-focused.syntax-hole {"
+         , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
+         , "  color: " <> holeActiveText <> ";"
+         , "}"
+         , ""
+         , ".syntax-statement.syntax-hovered.syntax-hole {"
+         , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
+         , "  color: " <> holeHoveredText <> ";"
+         , "}"
+         , ""
          , ".syntax-focused {"
          , "}"
          , ""
@@ -511,6 +565,9 @@ main = do
          , ".syntax-block {"
          , "  width: 100%;"
          , "  box-sizing: border-box;"
+         , "  display: flex;"
+         , "  flex-direction: column;"
+         , "  align-items: flex-start;"
          , "}"
          , ""
          , ".syntax-node + .syntax-symbol {"
