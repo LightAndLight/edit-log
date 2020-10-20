@@ -53,6 +53,7 @@ instance Monad m => MonadVersioned a (SessionT a m) where
   replaceH p h = trackVersioned $ replaceH p h
   insert p h = trackVersioned $ insert p h
   insertH p h = trackVersioned $ insertH p h
+  delete p ix = trackVersioned $ delete p ix
 
   snapshot = SessionT $ lift snapshot
 

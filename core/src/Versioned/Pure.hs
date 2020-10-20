@@ -1,5 +1,6 @@
-{-# language GADTs #-}
+{-# language FlexibleContexts #-}
 {-# language FlexibleInstances, MultiParamTypeClasses #-}
+{-# language GADTs #-}
 {-# language GeneralizedNewtypeDeriving #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
 {-# language InstanceSigs #-}
@@ -10,7 +11,7 @@ module Versioned.Pure
   , runVersionedT
   , Versioned
   , newVersioned
-  , debugLog
+  -- , debugLog
   )
 where
 
@@ -20,14 +21,13 @@ import Data.Functor.Identity (Identity(..))
 import Hash (Hash)
 import NodeType (KnownNodeType)
 import Versioned (MonadVersioned(..))
-import Log (MonadLog, Time, Entry(..), append, getEntries, getPhysicalTime)
+import Log (MonadLog, Time, Entry(..), append, getPhysicalTime)
 import Log.Pure (LogT, runLogT, Log, newLog)
 import Path (Path(..))
-import qualified Path
-import Store (MonadStore, addStatement, rebuild)
+import Sequence (IsSequence, Item)
+import Store (MonadStore, rebuild)
 import qualified Store
 import Store.Pure (StoreT, runStoreT, Store, newStore)
-import Syntax (Statement, Block)
 
 data Context a
   = Context
@@ -47,10 +47,11 @@ runVersionedT (Versioned s l ctx) m = do
 data Versioned a = Versioned Store (Log a) (Context a)
   deriving Show
 
+{-
 data DebugEntry a where
   DebugReplace :: Show b => Path a b -> b -> b -> DebugEntry a
   DebugInsert :: Path a Block -> Int -> Statement -> DebugEntry a
-  DebugDelete :: Path a Block -> Int -> Statement -> DebugEntry a
+  DebugDelete :: Path a b -> Int -> DeleteItem b -> DebugEntry a
 deriving instance Show (DebugEntry a)
 
 debugLog :: KnownNodeType a => Versioned a -> [(Time, DebugEntry a)]
@@ -82,6 +83,7 @@ debugLog (Versioned s l _) = (fmap.fmap) f entries
               Nothing -> error "impossible"
               Just old -> Path.showingPathTarget path (DebugDelete path ix old)
     Identity (entries, _) = runLogT l getEntries
+-}
 
 newVersioned :: forall a. KnownNodeType a => a -> Versioned a
 newVersioned a = Versioned store newLog ctx
@@ -120,19 +122,31 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         VersionedT . modify $ \s -> s { root = Store.rootHash res }
         pure $ Just (t, entry)
 
-  insert :: Path a Block -> (Int, Statement) -> VersionedT a m (Maybe (Time, Entry a))
-  insert path (ix, st) = do
-    sth <- addStatement st
-    insertH path (ix, sth)
+  insert :: (KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> VersionedT a m (Maybe (Time, Entry a))
+  insert path (ix, x) = do
+    xh <- Store.addKnownNode x
+    insertH path (ix, xh)
 
-  insertH :: Path a Block -> (Int, Hash Statement) -> VersionedT a m (Maybe (Time, Entry a))
-  insertH path (ix, sth) = do
+  insertH :: IsSequence b => Path a b -> (Int, Hash (Item b)) -> VersionedT a m (Maybe (Time, Entry a))
+  insertH path (ix, xh) = do
     rooth <- getRoot
-    m_rooth' <- Store.insertH path [(ix, [sth])] rooth
+    m_rooth' <- Store.insertH path [(ix, [xh])] rooth
     case m_rooth' of
       Nothing -> pure Nothing
       Just rooth' -> do
-        let entry = Insert path ix sth
+        let entry = Insert path ix xh
+        t <- append entry
+        VersionedT $ modify $ \s -> s { root = rooth' }
+        pure $ Just (t, entry)
+
+  delete :: (KnownNodeType a, IsSequence b) => Path a b -> Int -> VersionedT a m (Maybe (Time, Entry a))
+  delete path ix = do
+    rooth <- getRoot
+    mRes <- Store.delete path ix rooth
+    case mRes of
+      Nothing -> pure Nothing
+      Just (rooth', deleted)  -> do
+        let entry = Delete path ix deleted
         t <- append entry
         VersionedT $ modify $ \s -> s { root = rooth' }
         pure $ Just (t, entry)

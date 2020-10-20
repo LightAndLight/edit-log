@@ -21,6 +21,8 @@ import Data.GADT.Show (GShow(..))
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Type.Equality ((:~:)(..))
 
+import Hash (Hash)
+import Node (Node(..))
 import NodeType (KnownNodeType, nodeType)
 import qualified NodeType
 import Syntax
@@ -66,9 +68,6 @@ deriveArgDict ''Level
 
 instance GShow (Level a) where
   gshowsPrec = showsPrec
-
--- type Has' Show (Level a) (Flip Trie f) =
---   (ArgDict (ComposeC Show g) (Level a), ConstraintsFor' (Level a) Show (Flip Trie f)) 
 
 eqLevel :: Level a b -> Level a c -> Maybe (b :~: c)
 eqLevel l1 l2 =
@@ -267,6 +266,224 @@ instance GCompare (Level a) where
       GT -> GGT
   gcompare Params_Index{} _ = GLT
   gcompare _ Params_Index{} = GGT
+
+downLevel :: Level a b -> a -> Maybe (b, b -> a)
+downLevel level a =
+  case level of
+    For_Ident ->
+      case a of
+        For ident expr body -> Just (ident, \ident' -> For ident' expr body)
+        _ -> Nothing
+    For_Expr ->
+      case a of
+        For ident expr body -> Just (expr, \expr' -> For ident expr' body)
+        _ -> Nothing
+    For_Block ->
+      case a of
+        For ident expr body -> Just (body, \body' -> For ident expr body')
+        _ -> Nothing
+    IfThen_Cond ->
+      case a of
+        IfThen cond then_ -> Just (cond, \cond' -> IfThen cond' then_)
+        _ -> Nothing
+    IfThen_Then ->
+      case a of
+        IfThen cond then_ -> Just (then_, \then_' -> IfThen cond then_')
+        _ -> Nothing
+    IfThenElse_Cond ->
+      case a of
+        IfThenElse cond then_ else_ -> Just (cond, \cond' -> IfThenElse cond' then_ else_)
+        _ -> Nothing
+    IfThenElse_Then ->
+      case a of
+        IfThenElse cond then_ else_ -> Just (then_, \then_' -> IfThenElse cond then_' else_)
+        _ -> Nothing
+    IfThenElse_Else ->
+      case a of
+        IfThenElse cond then_ else_ -> Just (else_, \else_' -> IfThenElse cond then_ else_')
+        _ -> Nothing
+    Print_Value ->
+      case a of
+        Print val -> Just (val, \val' -> Print val')
+        _ -> Nothing
+    Return_Value ->
+      case a of
+        Return val -> Just (val, \val' -> Return val')
+        _ -> Nothing
+    Def_Name ->
+      case a of
+        Def name params body -> Just (name, \name' -> Def name' params body)
+        _ -> Nothing
+    Def_Args ->
+      case a of
+        Def name params body -> Just (params, \params' -> Def name params' body)
+        _ -> Nothing
+    Def_Body ->
+      case a of
+        Def name params body -> Just (body, \body' -> Def name params body')
+        _ -> Nothing
+    BinOp_Left ->
+      case a of
+        BinOp op left right -> Just (left, \left' -> BinOp op left' right)
+        _ -> Nothing
+    BinOp_Right ->
+      case a of
+        BinOp op left right -> Just (right, \right' -> BinOp op left right')
+        _ -> Nothing
+    UnOp_Value ->
+      case a of
+        UnOp op val -> Just (val, \val' -> UnOp op val')
+        _ -> Nothing
+    Call_Function ->
+      case a of
+        Call func args -> Just (func, \func' -> Call func' args)
+        _ -> Nothing
+    Call_Args ->
+      case a of
+        Call func args -> Just (args, \args' -> Call func args')
+        _ -> Nothing
+    Block_Index ix ->
+      case a of
+        Block sts | 0 <= ix && ix < length sts ->
+          let
+            (prefix, suffix) = splitAt ix $ NonEmpty.toList sts
+          in
+            case suffix of
+              [] -> error "impossible"
+              st : rest ->
+                Just (st, \st' -> Block $ foldr NonEmpty.cons (st' NonEmpty.:| rest) prefix)
+        _ -> Nothing
+    Args_Index ix ->
+      case a of
+        Args xs | 0 <= ix && ix < length xs ->
+          let
+            (prefix, suffix) = splitAt ix xs
+          in
+            case suffix of
+              [] -> error "impossible"
+              x : rest ->
+                Just (x, \x' -> Args $ prefix ++ x' : rest)
+        _ -> Nothing
+    Params_Index ix ->
+      case a of
+        Params xs ->
+          let
+            (prefix, suffix) = splitAt ix xs
+          in
+            case suffix of
+              [] -> error "impossible"
+              x : rest ->
+                Just (x, \x' -> Params $ prefix ++ x' : rest)
+        _ -> Nothing
+
+downLevelNode :: Level a b -> Node a -> Maybe (Hash b, Hash b -> Node a)
+downLevelNode level a =
+  case level of
+    For_Ident ->
+      case a of
+        NFor ident expr body -> Just (ident, \ident' -> NFor ident' expr body)
+        _ -> Nothing
+    For_Expr ->
+      case a of
+        NFor ident expr body -> Just (expr, \expr' -> NFor ident expr' body)
+        _ -> Nothing
+    For_Block ->
+      case a of
+        NFor ident expr body -> Just (body, \body' -> NFor ident expr body')
+        _ -> Nothing
+    IfThen_Cond ->
+      case a of
+        NIfThen cond then_ -> Just (cond, \cond' -> NIfThen cond' then_)
+        _ -> Nothing
+    IfThen_Then ->
+      case a of
+        NIfThen cond then_ -> Just (then_, \then_' -> NIfThen cond then_')
+        _ -> Nothing
+    IfThenElse_Cond ->
+      case a of
+        NIfThenElse cond then_ else_ -> Just (cond, \cond' -> NIfThenElse cond' then_ else_)
+        _ -> Nothing
+    IfThenElse_Then ->
+      case a of
+        NIfThenElse cond then_ else_ -> Just (then_, \then_' -> NIfThenElse cond then_' else_)
+        _ -> Nothing
+    IfThenElse_Else ->
+      case a of
+        NIfThenElse cond then_ else_ -> Just (else_, \else_' -> NIfThenElse cond then_ else_')
+        _ -> Nothing
+    Print_Value ->
+      case a of
+        NPrint val -> Just (val, \val' -> NPrint val')
+        _ -> Nothing
+    Return_Value ->
+      case a of
+        NReturn val -> Just (val, \val' -> NReturn val')
+        _ -> Nothing
+    Def_Name ->
+      case a of
+        NDef name params body -> Just (name, \name' -> NDef name' params body)
+        _ -> Nothing
+    Def_Args ->
+      case a of
+        NDef name params body -> Just (params, \params' -> NDef name params' body)
+        _ -> Nothing
+    Def_Body ->
+      case a of
+        NDef name params body -> Just (body, \body' -> NDef name params body')
+        _ -> Nothing
+    BinOp_Left ->
+      case a of
+        NBinOp op left right -> Just (left, \left' -> NBinOp op left' right)
+        _ -> Nothing
+    BinOp_Right ->
+      case a of
+        NBinOp op left right -> Just (right, \right' -> NBinOp op left right')
+        _ -> Nothing
+    UnOp_Value ->
+      case a of
+        NUnOp op val -> Just (val, \val' -> NUnOp op val')
+        _ -> Nothing
+    Call_Function ->
+      case a of
+        NCall func args -> Just (func, \func' -> NCall func' args)
+        _ -> Nothing
+    Call_Args ->
+      case a of
+        NCall func args -> Just (args, \args' -> NCall func args')
+        _ -> Nothing
+    Block_Index ix ->
+      case a of
+        NBlock sts | 0 <= ix && ix < length sts ->
+          let
+            (prefix, suffix) = splitAt ix $ NonEmpty.toList sts
+          in
+            case suffix of
+              [] -> error "impossible"
+              st : rest ->
+                Just (st, \st' -> NBlock $ foldr NonEmpty.cons (st' NonEmpty.:| rest) prefix)
+        _ -> Nothing
+    Args_Index ix ->
+      case a of
+        NArgs xs | 0 <= ix && ix < length xs ->
+          let
+            (prefix, suffix) = splitAt ix xs
+          in
+            case suffix of
+              [] -> error "impossible"
+              x : rest ->
+                Just (x, \x' -> NArgs $ prefix ++ x' : rest)
+        _ -> Nothing
+    Params_Index ix ->
+      case a of
+        NParams xs ->
+          let
+            (prefix, suffix) = splitAt ix xs
+          in
+            case suffix of
+              [] -> error "impossible"
+              x : rest ->
+                Just (x, \x' -> NParams $ prefix ++ x' : rest)
+        _ -> Nothing
 
 data Path a :: * -> * where
   Nil :: Path a a

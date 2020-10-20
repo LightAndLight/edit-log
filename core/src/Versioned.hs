@@ -1,3 +1,5 @@
+{-# language BangPatterns #-}
+{-# language FlexibleContexts #-}
 {-# language FunctionalDependencies, MultiParamTypeClasses #-}
 {-# language FlexibleInstances, UndecidableInstances #-}
 module Versioned where
@@ -9,14 +11,16 @@ import Hash (Hash)
 import Log (Time, Entry)
 import NodeType (KnownNodeType)
 import Path (Path)
-import Syntax (Statement, Block)
+import Sequence (IsSequence, Item)
 
 class Monad m => MonadVersioned a m | m -> a where
   replace :: KnownNodeType b => Path a b -> b -> m (Maybe (Time, Entry a))
   replaceH :: Path a b -> Hash b -> m (Maybe (Time, Entry a))
 
-  insert :: Path a Block -> (Int, Statement) -> m (Maybe (Time, Entry a))
-  insertH :: Path a Block -> (Int, Hash Statement) -> m (Maybe (Time, Entry a))
+  insert :: (KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> m (Maybe (Time, Entry a))
+  insertH :: IsSequence b => Path a b -> (Int, Hash (Item b)) -> m (Maybe (Time, Entry a))
+
+  delete :: (KnownNodeType a, IsSequence b) => Path a b -> Int -> m (Maybe (Time, Entry a))
 
   snapshot :: m (Time, a)
 
@@ -28,6 +32,8 @@ instance MonadVersioned a m => MonadVersioned a (StateT s m) where
 
   insert p a = lift $ insert p a
   insertH p a = lift $ insertH p a
+
+  delete p = lift . delete p
 
   snapshot = lift snapshot
 

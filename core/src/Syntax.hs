@@ -1,13 +1,19 @@
+{-# language FlexibleInstances, MultiParamTypeClasses #-}
 {-# language GeneralisedNewtypeDeriving #-}
 {-# language DeriveGeneric #-}
 {-# language TemplateHaskell #-}
+{-# language TypeFamilies #-}
 {-# options_ghc -fno-warn-overlapping-patterns #-}
 module Syntax where
 
 import Control.Lens.TH (makePrisms)
 import Data.Hashable (Hashable)
 import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as NonEmpty
+import qualified Data.Maybe as Maybe
 import GHC.Generics (Generic)
+
+import Sequence (IsSequence(..))
 
 data Ident
   = Ident String
@@ -18,6 +24,12 @@ instance Hashable Ident
 newtype Params = Params [Ident]
   deriving (Eq, Show)
 makePrisms ''Params
+
+instance IsSequence Params where
+  type Item Params = Ident
+  deleteAt ix (Params xs) = Params $ deleteAt ix xs
+  insertAt ix val (Params xs) = Params $ insertAt ix val xs
+  insertAll def vals (Params xs) = Params $ insertAll def vals xs
 
 data Statement
   = For Ident Expr Block
@@ -32,6 +44,20 @@ data Statement
 newtype Block
   = Block (NonEmpty Statement)
   deriving (Eq, Show)
+
+instance IsSequence Block where
+  type Item Block = Statement
+  deleteAt ix (Block sts) =
+    Block . Maybe.fromMaybe (pure SHole) . NonEmpty.nonEmpty $
+    deleteAt ix (NonEmpty.toList sts)
+
+  insertAt ix val (Block sts) =
+    Block . Maybe.fromMaybe (pure SHole) . NonEmpty.nonEmpty $
+    insertAt ix val (NonEmpty.toList sts)
+
+  insertAll def vals (Block sts) =
+    Block . Maybe.fromMaybe (pure SHole) . NonEmpty.nonEmpty $
+    insertAll def vals (NonEmpty.toList sts)
 
 data BinOp
   = Add
@@ -55,6 +81,12 @@ instance Hashable UnOp
 
 newtype Args = Args [Expr]
   deriving (Eq, Show)
+
+instance IsSequence Args where
+  type Item Args = Expr
+  deleteAt ix (Args xs) = Args $ deleteAt ix xs
+  insertAt ix val (Args xs) = Args $ insertAt ix val xs
+  insertAll def vals (Args xs) = Args $ insertAll def vals xs
 
 data Expr
   = Bool Bool

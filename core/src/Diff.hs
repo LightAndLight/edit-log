@@ -17,6 +17,7 @@ import qualified Log
 import Node (Node(..))
 import Path (Level(..), Path(..), eqLevel)
 import qualified Path
+import Sequence (IsSequence, Item)
 import Store (MonadStore)
 import qualified Store
 import Syntax (Block(..), Statement(..))
@@ -51,11 +52,11 @@ setEntry level d entries =
 
 data LeafChange :: * -> * where
   ReplaceLeaf :: { changeOld :: Hash a, changeNew :: Hash a } -> LeafChange a
-  EditBlockLeaf :: SequenceDiff (Hash Statement) -> LeafChange Block
+  EditSequenceLeaf :: IsSequence a => SequenceDiff (Hash (Item a)) -> LeafChange a
 deriving instance Show (LeafChange a)
 
 data BranchChange :: * -> * where
-  EditBlockBranch :: SequenceDiff (Hash Statement) -> BranchChange Block
+  EditSequenceBranch :: IsSequence a => SequenceDiff (Hash (Item a)) -> BranchChange a
 deriving instance Show (BranchChange a)
 
 data Diff a where
@@ -73,32 +74,39 @@ applyChange p c h =
     ReplaceLeaf _ newInner -> do
       m_res <- Store.setH p (pure newInner) h
       pure $ Store.rootHash <$> m_res
-    EditBlockLeaf changes ->
+    EditSequenceLeaf changes ->
       Store.modifyH
         p
-        (\blockHash -> do
-           mNode <- Store.lookupNode blockHash
+        (\hash -> do
+           mNode <- Store.lookupNode hash
            case mNode of
              Nothing ->
-               pure blockHash
-             Just (NBlock statementHashes) ->
-               case NonEmpty.nonEmpty $ SequenceDiff.apply changes (NonEmpty.toList statementHashes) of
-                 Nothing ->
-                   Store.addBlock . Block $ pure SHole
-                 Just statementHashes' ->
-                   Store.addNode $ NBlock statementHashes'
+               pure hash
+             Just node ->
+               case node of
+                 NBlock statementHashes ->
+                   case NonEmpty.nonEmpty $ SequenceDiff.apply changes (NonEmpty.toList statementHashes) of
+                     Nothing ->
+                       Store.addBlock . Block $ pure SHole
+                     Just statementHashes' ->
+                       Store.addNode $ NBlock statementHashes'
+                 NArgs hs ->
+                   Store.addNode . NArgs $ SequenceDiff.apply changes hs
+                 NParams hs ->
+                   Store.addNode . NParams $ SequenceDiff.apply changes hs
+                 _ -> pure hash
         )
         h
 
-editBlockBranchChange ::
+editSequenceBranchChange ::
   MonadStore m =>
-  SequenceDiff (Hash Statement) ->
-  BranchChange Block ->
-  m (BranchChange Block)
-editBlockBranchChange newChanges existingBranchChange =
+  SequenceDiff (Hash (Item a)) ->
+  BranchChange a ->
+  m (BranchChange a)
+editSequenceBranchChange newChanges existingBranchChange =
   case existingBranchChange of
-    EditBlockBranch existingChanges ->
-      pure . EditBlockBranch $ SequenceDiff.after newChanges existingChanges
+    EditSequenceBranch existingChanges ->
+      pure . EditSequenceBranch $ SequenceDiff.after newChanges existingChanges
 
 insert :: MonadStore m => Path a b -> LeafChange b -> Diff a -> m (Diff a)
 insert p c currentDiff =
@@ -109,13 +117,13 @@ insert p c currentDiff =
         Branch m_branchChange ms ->
           case c of
             ReplaceLeaf{} -> pure $ Leaf c
-            EditBlockLeaf newChanges ->
+            EditSequenceLeaf newChanges ->
               case m_branchChange of
                 Nothing ->
-                  pure $ Branch (Just $ EditBlockBranch newChanges) ms
+                  pure $ Branch (Just $ EditSequenceBranch newChanges) ms
                 Just existingBranchChange ->
                   (\branchChange' -> Branch (Just branchChange') ms) <$>
-                  editBlockBranchChange newChanges existingBranchChange
+                  editSequenceBranchChange newChanges existingBranchChange
         Leaf{} -> pure $ Leaf c
     Cons l p' ->
       case currentDiff of
@@ -138,24 +146,41 @@ insert p c currentDiff =
               pure $ case m_newOuter' of
                 Nothing -> currentDiff
                 Just newOuter' -> Leaf $ ReplaceLeaf old newOuter'
-            EditBlockLeaf changes ->
+            EditSequenceLeaf changes ->
               case l of
                 Block_Index ix ->
-                  case SequenceDiff.valueAt ix changes of
-                    SequenceDiff.Unknown -> do
-                      -- there is an insert change, but there also needs to be other changes applied to existing
-                      -- (non-inserted) block indices
-                      entry <- Entry l <$> insert p' c emptyDiff
-                      pure $ Branch (Just $ EditBlockBranch changes) (pure entry)
-                    SequenceDiff.Known statementh -> do
-                      m_statementh' <- applyChange p' c statementh
-                      pure $ case m_statementh' of
-                        Nothing -> currentDiff
-                        Just statementh' ->
-                          let
-                            changes' = SequenceDiff.replace ix statementh' changes
-                          in
-                            Leaf $ EditBlockLeaf changes'
+                  changeSequenceDiff l ix p' c currentDiff changes
+                Args_Index ix ->
+                  changeSequenceDiff l ix p' c currentDiff changes
+                Params_Index ix ->
+                  changeSequenceDiff l ix p' c currentDiff changes
+                _ -> pure currentDiff
+
+changeSequenceDiff ::
+  (MonadStore m, IsSequence a) =>
+  Level a (Item a) ->
+  Int ->
+  Path (Item a) b ->
+  LeafChange b ->
+  Diff a ->
+  SequenceDiff (Hash (Item a)) ->
+  m (Diff a)
+changeSequenceDiff l ix path newChange currentDiff currentSequenceDiff =
+  case SequenceDiff.valueAt ix currentSequenceDiff of
+    SequenceDiff.Unknown -> do
+      -- there is an insert change, but there also needs to be other changes applied to existing
+      -- (non-inserted) args indices
+      entry <- Entry l <$> insert path newChange emptyDiff
+      pure $ Branch (Just $ EditSequenceBranch currentSequenceDiff) (pure entry)
+    SequenceDiff.Known statementh -> do
+      m_statementh' <- applyChange path newChange statementh
+      pure $ case m_statementh' of
+        Nothing -> currentDiff
+        Just statementh' ->
+          let
+            newSequenceDiff = SequenceDiff.replace ix statementh' currentSequenceDiff
+          in
+            Leaf $ EditSequenceLeaf newSequenceDiff
 
 traversal ::
   forall a b.
@@ -190,16 +215,17 @@ toDiff =
          Log.Replace path old new ->
            insert path (ReplaceLeaf old new) acc
          Log.Insert path ix new ->
-           insert path (EditBlockLeaf $ SequenceDiff.insert ix new SequenceDiff.empty) acc
+           insert path (EditSequenceLeaf $ SequenceDiff.insert ix new SequenceDiff.empty) acc
          Log.Delete path ix old -> error "TODO: translate Delete into diff entry" path ix old
     )
     emptyDiff
 
-fromEditBlock ::
-  Path a Block ->
-  SequenceDiff (Hash Statement) ->
+fromEditSequence ::
+  IsSequence b =>
+  Path a b ->
+  SequenceDiff (Hash (Item b)) ->
   [Log.Entry a]
-fromEditBlock path changes =
+fromEditSequence path changes =
   -- the log entries appear in reverse, because inserting the very last 'position'
   -- first doesn't invalidate the indices of all the other inserts
   foldl'
@@ -225,12 +251,12 @@ fromDiff = go Nil
         Leaf leafChange ->
           case leafChange of
             ReplaceLeaf old new -> [Log.Replace path old new]
-            EditBlockLeaf changes -> fromEditBlock path changes
+            EditSequenceLeaf changes -> fromEditSequence path changes
         Branch branchChange entries ->
           foldMap
             (\change ->
                case change of
-                 EditBlockBranch changes -> fromEditBlock path changes
+                 EditSequenceBranch changes -> fromEditSequence path changes
             )
             branchChange <>
           (NonEmpty.toList entries >>= \(Entry level d') -> go (Path.snoc path level) d')

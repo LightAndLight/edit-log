@@ -27,6 +27,7 @@ library
                      , Path
                      , Path.Trie
                      , Path.Trie.Internal
+                     , Sequence
                      , Session
                      , Session.Pure
                      , Store

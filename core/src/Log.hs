@@ -11,7 +11,7 @@ import Control.Monad.Trans.Class (MonadTrans, lift)
 import Hash (Hash)
 import Path (Path)
 import Store.Pure (StoreT)
-import Syntax (Block, Statement)
+import Sequence (IsSequence, Item)
 
 newtype Time = Time Int
   deriving (Eq, Ord, Show)
@@ -29,14 +29,16 @@ data Entry a where
     Hash b -> -- new
     Entry a
   Insert ::
-    Path a Block ->
+    IsSequence b =>
+    Path a b ->
     Int ->
-    Hash Statement -> -- new
+    Hash (Item b) -> -- new
     Entry a
   Delete ::
-    Path a Block ->
+    IsSequence b =>
+    Path a b ->
     Int ->
-    Hash Statement -> -- old
+    Hash (Item b) -> -- old
     Entry a
 deriving instance Show (Entry a)
 

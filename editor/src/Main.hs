@@ -32,12 +32,13 @@ import qualified Reflex.Dom as Dom
 import Check (CheckError)
 import qualified Check
 import Log (Entry, Time)
-import NodeType (KnownNodeType)
+import Node (Node(..))
+import NodeType (KnownNodeType, NodeType(..), nodeType)
 import Path (Path(..), Level(..))
 import qualified Path
 import Path.Trie (Trie)
 import qualified Path.Trie as Trie
-import Syntax (Block(..), Statement(..))
+import Syntax (Block(..), Statement(..), Expr(..), Ident(..))
 import Session (Session, newSession)
 import Session.Pure (runSessionT)
 import qualified Versioned
@@ -46,9 +47,10 @@ import Versioned.Pure (Versioned, runVersionedT, newVersioned)
 import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..), renderContextMenu)
 import Focus (Focus(..))
 import Navigation (nextHole, prevHole)
+import qualified Navigation
 import Render
-  ( NodeControls(..), NodeEvent(..), RenderNodeEnv(..)
-  , rniNodeEvent, rniFocusElement
+  ( NodeControls(..), NodeEvent(..), RenderNodeEnv(..), RenderNodeInfo(..), FocusedNode(..)
+  , rniNodeEvent, rniFocusElement, rniFocusNode
   , renderNodeHash
   )
 
@@ -57,6 +59,7 @@ data DocumentKeys t
   { dkSpace :: Event t ()
   , dkEscape :: Event t ()
   , dkEnter :: Event t ()
+  , dkDelete :: Event t ()
   , dkUp :: Event t ()
   , dkDown :: Event t ()
   , dkTab :: Event t ()
@@ -107,6 +110,8 @@ documentKeys = do
         fmapMaybe (\case; "Escape" -> Just (); _ -> Nothing) eKeyDown
     , dkEnter =
         fmapMaybe (\case; "Enter" -> Just (); _ -> Nothing) eKeyDown
+    , dkDelete =
+        fmapMaybe (\case; "Delete" -> Just (); _ -> Nothing) eKeyDown
     , dkUp =
         fmapMaybe (\case; "ArrowUp" -> Just (); _ -> Nothing) eKeyDown
     , dkDown =
@@ -146,6 +151,7 @@ data EditAction a where
   InsertAfter :: EditAction a
   NextHole :: EditAction a
   PrevHole :: EditAction a
+  Delete :: FocusedNode a -> EditAction a
   SetFocus :: Focus a -> EditAction a
 
 data EditorState a
@@ -161,6 +167,7 @@ data DocumentControls t
   , dPrevHole :: Event t ()
   , dNewLineAbove :: Event t ()
   , dNewLineBelow :: Event t ()
+  , dDelete :: Event t ()
   }
 
 editor ::
@@ -199,6 +206,7 @@ editor initial initialFocus = do
       , dPrevHole = dkShiftTab keys
       , dNewLineAbove = select (dkLetter keys) (Const2 'O')
       , dNewLineBelow = select (dkLetter keys) (Const2 'o')
+      , dDelete = dkDelete keys
       }
 
     initialVersioned :: Versioned a
@@ -209,11 +217,21 @@ editor initial initialFocus = do
 
   rec
     let
-      dMenuClosed = (MenuClosed ==) <$> current dMenu
-      eNextHole = gate dMenuClosed (NextHole <$ dNextHole documentControls)
-      ePrevHole = gate dMenuClosed (PrevHole <$ dPrevHole documentControls)
-      eInsertBefore = gate dMenuClosed (InsertBefore <$ dNewLineAbove documentControls)
-      eInsertAfter = gate dMenuClosed (InsertAfter <$ dNewLineBelow documentControls)
+      bMenuClosed = (MenuClosed ==) <$> current dMenu
+      eNextHole = gate bMenuClosed (NextHole <$ dNextHole documentControls)
+      ePrevHole = gate bMenuClosed (PrevHole <$ dPrevHole documentControls)
+      eInsertBefore = gate bMenuClosed (InsertBefore <$ dNewLineAbove documentControls)
+      eInsertAfter = gate bMenuClosed (InsertAfter <$ dNewLineBelow documentControls)
+      eDelete =
+        attachWithMaybe
+          (\(menuClosed, mFocusNode) () ->
+             case mFocusNode of
+               Just focusNode | menuClosed ->
+                 Just $ Delete focusNode
+               _ -> Nothing
+          )
+          ((,) <$> bMenuClosed <*> current dFocusNode)
+          (dDelete documentControls)
 
     (dVersioned, _dSession, dFocus) <-
       (\d -> (esVersioned <$> d, esSession <$> d, esFocus <$> d)) <$>
@@ -244,6 +262,42 @@ editor initial initialFocus = do
                             pure ()
                           _ -> pure ()
                       Path.UnsnocEmpty -> pure ()
+                  Delete (FocusedNode path _ (node :: Node b)) ->
+                    case nodeType @b of
+                      TIdent ->
+                        case node of
+                          NIHole ->
+                            case Path.unsnoc path of
+                              Path.UnsnocMore prefix (Params_Index ix) -> do
+                                _ <- Versioned.delete prefix ix
+                                pure ()
+                              _ -> pure ()
+                          _ -> do
+                            _ <- Versioned.replace path IHole
+                            pure ()
+                      TStatement ->
+                        case node of
+                          NSHole ->
+                            case Path.unsnoc path of
+                              Path.UnsnocMore prefix (Block_Index ix) -> do
+                                _ <- Versioned.delete prefix ix
+                                pure ()
+                              _ -> pure ()
+                          _ -> do
+                            _ <- Versioned.replace path SHole
+                            pure ()
+                      TExpr ->
+                        case node of
+                          NEHole ->
+                            case Path.unsnoc path of
+                              Path.UnsnocMore prefix (Args_Index ix) -> do
+                                _ <- Versioned.delete prefix ix
+                                pure ()
+                              _ -> pure ()
+                          _ -> do
+                            _ <- Versioned.replace path EHole
+                            pure ()
+                      _ -> pure ()
                   _ -> pure ()
               focus' =
                 case action of
@@ -284,6 +338,36 @@ editor initial initialFocus = do
                         prevHole versioned' path
                       NoFocus ->
                         prevHole versioned' Nil
+                  Delete (FocusedNode path hash (node :: Node b)) ->
+                    case nodeType @b of
+                      TIdent ->
+                        case node of
+                          NIHole ->
+                            case Path.unsnoc path of
+                              Path.UnsnocMore _ Params_Index{} ->
+                                Maybe.fromMaybe (esFocus editorState) $
+                                Navigation.findNextHole versioned' path hash
+                              _ -> esFocus editorState
+                          _ -> esFocus editorState
+                      TStatement ->
+                        case node of
+                          NSHole ->
+                            case Path.unsnoc path of
+                              Path.UnsnocMore _ Block_Index{} ->
+                                Maybe.fromMaybe (esFocus editorState) $
+                                Navigation.findNextHole versioned' path hash
+                              _ -> esFocus editorState
+                          _ -> esFocus editorState
+                      TExpr ->
+                        case node of
+                          NEHole ->
+                            case Path.unsnoc path of
+                              Path.UnsnocMore _ Args_Index{} ->
+                                Maybe.fromMaybe (esFocus editorState) $
+                                Navigation.findNextHole versioned' path hash
+                              _ -> esFocus editorState
+                          _ -> esFocus editorState
+                      _ -> esFocus editorState
                   SetFocus newFocus -> newFocus
             in
               EditorState { esVersioned = versioned', esSession = session', esFocus = focus' }
@@ -309,6 +393,7 @@ editor initial initialFocus = do
          , ePrevHole
          , eInsertBefore
          , eInsertAfter
+         , eDelete
          ]
         )
 
@@ -318,7 +403,6 @@ editor initial initialFocus = do
       dVersioned
 
     let
-
       dCheckResult :: Dynamic t (Either (Trie a CheckError) ())
       dCheckResult =
         (\rootHash versioned ->
@@ -361,38 +445,30 @@ editor initial initialFocus = do
         , _rnPath = Nil
         }
 
-      dRenderNodeHash ::
-        Dynamic t
-          (m
-             ( Event t (NodeEvent a)
-             , Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
-             )
-          )
+      dRenderNodeHash :: Dynamic t (m (Dynamic t (RenderNodeInfo t a)))
       dRenderNodeHash =
         (\rootHash -> do
           ((), dRenderNodeInfo) <-
             runDynamicWriterT . flip runReaderT renderNodeEnv $
             renderNodeHash rootHash
-          pure
-            ( switchDyn $ view rniNodeEvent <$> dRenderNodeInfo
-            , dRenderNodeInfo >>= view rniFocusElement
-            )
+          pure dRenderNodeInfo
         ) <$>
         dRootHash
 
     dRenderNodeHash' ::
-      Dynamic t
-        ( Event t (NodeEvent a)
-        , Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
-        ) <-
+      Dynamic t (RenderNodeInfo t a) <-
+      join <$>
       Dom.widgetHold (join . sample $ current dRenderNodeHash) (updated dRenderNodeHash)
 
     let
+      dFocusNode :: Dynamic t (Maybe (FocusedNode a))
+      dFocusNode = dRenderNodeHash' >>= view rniFocusNode
+
       dFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
-      dFocusElement = dRenderNodeHash' >>= snd
+      dFocusElement = dRenderNodeHash' >>= view rniFocusElement
 
       eRenderNode :: Event t (NodeEvent a)
-      eRenderNode = switchDyn $ fst <$> dRenderNodeHash'
+      eRenderNode = switchDyn $ view rniNodeEvent <$> dRenderNodeHash'
 
     let eNode = leftmost [ContextMenuEvent <$> eContextMenu, eRenderNode]
 

@@ -3,6 +3,7 @@
 {-# language LambdaCase #-}
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
+{-# language TupleSections #-}
 module Store where
 
 import Control.Applicative (empty)
@@ -14,7 +15,6 @@ import Control.Monad.Reader (ReaderT)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
-import Data.Function (on)
 import qualified Data.List as List
 import qualified Data.List.NonEmpty as NonEmpty
 
@@ -22,6 +22,8 @@ import Hash (Hash)
 import Node (Node(..), _NArgs, _NParams)
 import NodeType (KnownNodeType, NodeType(..), nodeType)
 import Path (Path(..), Level(..))
+import qualified Path
+import Sequence (IsSequence, Item, insertAll, deleteAt)
 import Syntax (Expr(..), Statement(..), Block(..), Ident(..), Args(..), Params(..))
 
 class Monad m => MonadStore m where
@@ -212,7 +214,7 @@ data SetH a b
   , valueHash :: Hash b
   }
 
-setH :: MonadStore m => Path a b -> m (Hash b)-> Hash a -> m (Maybe (SetH a b))
+setH :: MonadStore m => Path a b -> m (Hash b) -> Hash a -> m (Maybe (SetH a b))
 setH path_ val_ = runMaybeT . go path_ val_
   where
     go :: MonadStore m => Path a b -> m (Hash b) -> Hash a -> MaybeT m (SetH a b)
@@ -397,51 +399,65 @@ setHList _Ctor ix path mval n =
           pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
     _ -> empty
 
-{-
-
-insertAll [(0, [x, y])] [a, b] = [x, y, a, b]
-
-insertAll [(0, [x, y]), (1, [z, w])] [a, b] = [x, y, a, z, w, b]
-
-insertAll [(1, [z, w]), (0, [x, y])] [a, b] = [x, y, a, z, w, b]
-
-insertAll [(2, [z, w])] [a, b] = [a, b, z, w]
-
--}
-insertAll :: forall b. b -> [(Int, [b])] -> [b] -> [b]
-insertAll def inserts bs =
-  -- support inserting at the tail of the list
-  if maxIx >= length fullBs
-  then resultsWithoutLast ++ maxEntries
-  else resultsWithoutLast
-
-  where
-    (maxIx, maxEntries) = List.maximumBy (compare `on` fst) inserts
-
-    -- if there are entries that occur after the end of the original list,
-    -- pad the end of the list with an appropriate number of holes
-    fullBs =
-      bs ++
-      replicate (maxIx - length bs) def
-
-    -- intersperse the entries at the appropriate index
-    resultsWithoutLast = do
-      (ix, b) <- zip [0..] fullBs
-      case lookup ix inserts of
-        Nothing -> pure b
-        Just moreBs -> moreBs ++ [b]
-
-insertH :: MonadStore m => Path a Block -> [(Int, [Hash Statement])] -> Hash a -> m (Maybe (Hash a))
+insertH ::
+  (IsSequence b, MonadStore m) =>
+  Path a b ->
+  [(Int, [Hash (Item b)])] ->
+  Hash a ->
+  m (Maybe (Hash a))
 insertH path positions =
-  modifyH path $ \blockh -> do
-    m_node <- lookupNode blockh
+  modifyH path $ \hash -> do
+    m_node <- lookupNode hash
     case m_node of
-      Nothing -> error $ "missing node for " <> show blockh
-      Just block ->
-        case block of
+      Nothing -> error $ "missing node for " <> show hash
+      Just node ->
+        case node of
           NBlock sts -> do
             sholeHash <- addNode NSHole
             addNode . NBlock $ NonEmpty.fromList (insertAll sholeHash positions $ NonEmpty.toList sts)
+          NArgs xs -> do
+            eholeHash <- addNode NEHole
+            addNode . NArgs $ insertAll eholeHash positions xs
+          NParams xs -> do
+            iholeHash <- addNode NIHole
+            addNode . NParams $ insertAll iholeHash positions xs
+          _ -> pure hash
+
+delete ::
+  (IsSequence b, MonadStore m, KnownNodeType a) =>
+  Path a b ->
+  Int ->
+  Hash a ->
+  m (Maybe (Hash a, Hash (Item b)))
+delete path ix hash = do
+  mNode <- lookupNode hash
+  case mNode of
+    Nothing -> pure Nothing
+    Just node ->
+      case path of
+        Nil -> do
+          case node of
+            NBlock sts ->
+              Just . (, NonEmpty.toList sts !! ix) <$>
+              case deleteAt ix $ NonEmpty.toList sts of
+                [] ->
+                  addBlock $ Block (pure SHole)
+                st' : sts' ->
+                  addNode (NBlock (st' NonEmpty.:| sts'))
+            NArgs xs ->
+              Just . (, xs !! ix) <$> addNode (NArgs $ deleteAt ix xs)
+            NParams xs ->
+              Just . (, xs !! ix) <$> addNode (NParams $ deleteAt ix xs)
+            _ -> pure Nothing
+        Cons level path' ->
+          case Path.downLevelNode level node of
+            Nothing -> pure Nothing
+            Just (nextHash, mkNode) -> do
+              mRes <- Path.withKnownLevelTarget level $ delete path' ix nextHash
+              case mRes of
+                Nothing -> pure Nothing
+                Just (nextHash', deleted) ->
+                  Just . (, deleted) <$> addNode (mkNode nextHash')
 
 rebuild :: MonadStore m => Hash a -> m (Maybe a)
 rebuild = runMaybeT . go
