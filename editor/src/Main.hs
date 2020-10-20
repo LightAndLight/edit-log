@@ -142,6 +142,7 @@ documentKeys = do
 
 data EditAction a where
   Replace :: KnownNodeType b => Path a b -> b -> EditAction a
+  InsertBefore :: EditAction a
   InsertAfter :: EditAction a
   NextHole :: EditAction a
   PrevHole :: EditAction a
@@ -158,7 +159,8 @@ data DocumentControls t
   = DocumentControls
   { dNextHole :: Event t ()
   , dPrevHole :: Event t ()
-  , dNewLine :: Event t ()
+  , dNewLineAbove :: Event t ()
+  , dNewLineBelow :: Event t ()
   }
 
 editor ::
@@ -195,7 +197,8 @@ editor initial initialFocus = do
       DocumentControls
       { dNextHole = dkTab keys
       , dPrevHole = dkShiftTab keys
-      , dNewLine = select (dkLetter keys) (Const2 'o')
+      , dNewLineAbove = select (dkLetter keys) (Const2 'O')
+      , dNewLineBelow = select (dkLetter keys) (Const2 'o')
       }
 
     initialVersioned :: Versioned a
@@ -209,7 +212,8 @@ editor initial initialFocus = do
       dMenuClosed = (MenuClosed ==) <$> current dMenu
       eNextHole = gate dMenuClosed (NextHole <$ dNextHole documentControls)
       ePrevHole = gate dMenuClosed (PrevHole <$ dPrevHole documentControls)
-      eNewLine = gate dMenuClosed (InsertAfter <$ dNewLine documentControls)
+      eInsertBefore = gate dMenuClosed (InsertBefore <$ dNewLineAbove documentControls)
+      eInsertAfter = gate dMenuClosed (InsertAfter <$ dNewLineBelow documentControls)
 
     (dVersioned, _dSession, dFocus) <-
       (\d -> (esVersioned <$> d, esSession <$> d, esFocus <$> d)) <$>
@@ -222,6 +226,15 @@ editor initial initialFocus = do
                   Replace path val -> do
                     _ <- Versioned.replace path val
                     pure ()
+                  InsertBefore | Focus path <- esFocus editorState ->
+                    case Path.unsnoc path of
+                      Path.UnsnocMore prefix final ->
+                        case final of
+                          Block_Index ix -> do
+                            _ <- Versioned.insert prefix (ix, SHole)
+                            pure ()
+                          _ -> pure ()
+                      Path.UnsnocEmpty -> pure ()
                   InsertAfter | Focus path <- esFocus editorState ->
                     case Path.unsnoc path of
                       Path.UnsnocMore prefix final ->
@@ -237,6 +250,16 @@ editor initial initialFocus = do
                   Replace path _ ->
                     Maybe.fromMaybe (esFocus editorState) $
                     nextHole versioned' path
+                  InsertBefore ->
+                    case esFocus editorState of
+                      Focus path ->
+                        case Path.unsnoc path of
+                          Path.UnsnocMore prefix final ->
+                            case final of
+                              Block_Index ix -> Focus (Path.snoc prefix (Block_Index ix))
+                              _ -> esFocus editorState
+                          Path.UnsnocEmpty -> esFocus editorState
+                      NoFocus -> NoFocus
                   InsertAfter ->
                     case esFocus editorState of
                       Focus path ->
@@ -284,7 +307,8 @@ editor initial initialFocus = do
              eNode
          , eNextHole
          , ePrevHole
-         , eNewLine
+         , eInsertBefore
+         , eInsertAfter
          ]
         )
 
