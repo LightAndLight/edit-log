@@ -207,197 +207,25 @@ modifyHList _Ctor ix path f n =
           lift . addNode $ review _Ctor (prefix ++ elh' : suffix)
     _ -> empty
 
-data SetH a b
-  = SetH
-  { rootHash :: Hash a
-  , targetHash :: Hash b
-  , valueHash :: Hash b
-  }
-
-setH :: MonadStore m => Path a b -> m (Hash b) -> Hash a -> m (Maybe (SetH a b))
-setH path_ val_ = runMaybeT . go path_ val_
-  where
-    go :: MonadStore m => Path a b -> m (Hash b) -> Hash a -> MaybeT m (SetH a b)
-    go path mval rooth =
+setH :: (KnownNodeType a, MonadStore m) => Path a b -> Hash b -> Hash a -> m (Maybe (Hash a, Hash b))
+setH path val hash = do
+  mNode <- lookupNode hash
+  case mNode of
+    Nothing -> pure Nothing
+    Just node ->
       case path of
-        Nil -> do
-          valh <- lift mval
-          pure $ SetH { rootHash = valh, targetHash = rooth, valueHash = valh }
-        Cons l rest -> do
-          n <- MaybeT $ lookupNode rooth
-          case l of
-            For_Ident ->
-              case n of
-                NFor identh exprh bodyh -> do
-                  res <- go rest mval identh
-                  rooth' <- lift . addNode $ NFor (rootHash res) exprh bodyh
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            For_Expr ->
-              case n of
-                NFor identh exprh bodyh -> do
-                  res <- go rest mval exprh
-                  rooth' <- lift . addNode $ NFor identh (rootHash res) bodyh
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            For_Block ->
-              case n of
-                NFor identh exprh bodyh -> do
-                  res <- go rest mval bodyh
-                  rooth' <- lift . addNode $ NFor identh exprh (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            IfThen_Cond ->
-              case n of
-                NIfThen condh then_h -> do
-                  res <- go rest mval condh
-                  rooth' <- lift . addNode $ NIfThen (rootHash res) then_h
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            IfThen_Then ->
-              case n of
-                NIfThen condh then_h -> do
-                  res <- go rest mval then_h
-                  rooth' <- lift . addNode $ NIfThen condh (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            IfThenElse_Cond ->
-              case n of
-                NIfThenElse condh then_h else_h -> do
-                  res <- go rest mval condh
-                  rooth' <- lift . addNode $ NIfThenElse (rootHash res) then_h else_h
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            IfThenElse_Then ->
-              case n of
-                NIfThenElse condh then_h else_h -> do
-                  res <- go rest mval then_h
-                  rooth' <- lift . addNode $ NIfThenElse condh (rootHash res) else_h
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            IfThenElse_Else ->
-              case n of
-                NIfThenElse condh then_h else_h -> do
-                  res <- go rest mval else_h
-                  rooth' <- lift . addNode $ NIfThenElse condh then_h (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            Print_Value ->
-              case n of
-                NPrint valh -> do
-                  res <- go rest mval valh
-                  rooth' <- lift . addNode $ NPrint (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            Return_Value ->
-              case n of
-                NReturn valh -> do
-                  res <- go rest mval valh
-                  rooth' <- lift . addNode $ NReturn (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            Def_Name ->
-              case n of
-                NDef nameh args bodyh -> do
-                  res <- go rest mval nameh
-                  rooth' <- lift . addNode $ NDef (rootHash res) args bodyh
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            Def_Args ->
-              case n of
-                NDef nameh argsh bodyh -> do
-                  res <- go rest mval argsh
-                  rooth' <- lift . addNode $ NDef nameh (rootHash res) bodyh
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            Def_Body ->
-              case n of
-                NDef nameh args bodyh -> do
-                  res <- go rest mval bodyh
-                  rooth' <- lift . addNode $ NDef nameh args (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            BinOp_Left ->
-              case n of
-                NBinOp op lefth righth -> do
-                  res <- go rest mval lefth
-                  rooth' <- lift . addNode $ NBinOp op (rootHash res) righth
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            BinOp_Right ->
-              case n of
-                NBinOp op lefth righth -> do
-                  res <- go rest mval righth
-                  rooth' <- lift . addNode $ NBinOp op lefth (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            UnOp_Value -> do
-              case n of
-                NUnOp op valueh -> do
-                  res <- go rest mval valueh
-                  rooth' <- lift . addNode $ NUnOp op (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            Call_Function -> do
-              case n of
-                NCall funch argsh -> do
-                  res <- go rest mval funch
-                  rooth' <- lift . addNode $ NCall (rootHash res) argsh
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-            Call_Args -> do
-              case n of
-                NCall funch argsh -> do
-                  res <- go rest mval argsh
-                  rooth' <- lift . addNode $ NCall funch (rootHash res)
-                  pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            Block_Index ix -> do
-              case n of
-                NBlock sts | 0 <= ix && ix < length sts -> do
-                  let (prefix, more) = List.splitAt ix $ NonEmpty.toList sts
-                  case more of
-                    [] -> error "impossible"
-                    elh : suffix -> do
-                      res <- go rest mval elh
-                      rooth' <- lift . addNode $ NBlock (foldr NonEmpty.cons (rootHash res NonEmpty.:| suffix) prefix)
-                      pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-                _ -> empty
-
-            Args_Index ix ->
-              MaybeT $ setHList _NArgs ix rest mval n
-            Params_Index ix ->
-              MaybeT $ setHList _NParams ix rest mval n
-
-setHList ::
-  (KnownNodeType a, MonadStore m) =>
-  Prism' (Node a) [Hash b] ->
-  Int ->
-  Path b c ->
-  m (Hash c)->
-  Node a ->
-  m (Maybe (SetH a c))
-setHList _Ctor ix path mval n =
-  runMaybeT $
-  case n ^? _Ctor of
-    Just xs | 0 <= ix && ix < length xs -> do
-      let (prefix, more) = List.splitAt ix xs
-      case more of
-        [] -> error "impossible"
-        elh : suffix -> do
-          res <- MaybeT $ setH path mval elh
-          rooth' <- lift . addNode $ review _Ctor (prefix ++ rootHash res : suffix)
-          pure $ SetH { rootHash = rooth', targetHash = targetHash res, valueHash = valueHash res }
-    _ -> empty
+        Nil ->
+          pure $ Just (val, hash)
+        Cons level path' ->
+          case Path.downLevelNode level node of
+            Nothing -> pure Nothing
+            Just (nextHash, mkNode) -> do
+              mRes <- Path.withKnownLevelTarget level $ setH path' val nextHash
+              case mRes of
+                Nothing ->
+                  pure Nothing
+                Just (nextHash', old) -> do
+                  Just . (, old) <$> addNode (mkNode nextHash')
 
 insertH ::
   (IsSequence b, MonadStore m) =>

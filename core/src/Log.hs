@@ -9,6 +9,7 @@ import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 
 import Hash (Hash)
+import NodeType (KnownNodeType)
 import Path (Path)
 import Store.Pure (StoreT)
 import Sequence (IsSequence, Item)
@@ -24,6 +25,7 @@ tick (Time n) = Time (n+1)
 
 data Entry a where
   Replace ::
+    KnownNodeType a =>
     Path a b ->
     Hash b -> -- old
     Hash b -> -- new

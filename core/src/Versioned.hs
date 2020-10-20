@@ -14,8 +14,8 @@ import Path (Path)
 import Sequence (IsSequence, Item)
 
 class Monad m => MonadVersioned a m | m -> a where
-  replace :: KnownNodeType b => Path a b -> b -> m (Maybe (Time, Entry a))
-  replaceH :: Path a b -> Hash b -> m (Maybe (Time, Entry a))
+  replace :: (KnownNodeType a, KnownNodeType b) => Path a b -> b -> m (Maybe (Time, Entry a))
+  replaceH :: KnownNodeType a => Path a b -> Hash b -> m (Maybe (Time, Entry a))
 
   insert :: (KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> m (Maybe (Time, Entry a))
   insertH :: IsSequence b => Path a b -> (Int, Hash (Item b)) -> m (Maybe (Time, Entry a))

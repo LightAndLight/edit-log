@@ -95,31 +95,32 @@ newVersioned a = Versioned store newLog ctx
 instance Monad m => MonadVersioned a (VersionedT a m) where
   getRoot = VersionedT $ gets root
 
-  replace :: forall b. KnownNodeType b => Path a b -> b -> VersionedT a m (Maybe (Time, Entry a))
+  replace :: forall b. (KnownNodeType a, KnownNodeType b) => Path a b -> b -> VersionedT a m (Maybe (Time, Entry a))
   replace path value = do
     rooth <- getRoot
+    valh <- Store.addKnownNode @b value
     m_res <-
       Store.setH
         path
-        (Store.addKnownNode @b value)
+        valh
         rooth
     case m_res of
       Nothing -> pure Nothing
-      Just res -> do
-        let entry = Replace path (Store.targetHash res) (Store.valueHash res)
+      Just (rooth', oldh) -> do
+        let entry = Replace path oldh valh
         t <- append entry
-        VersionedT $ modify $ \s -> s { root = Store.rootHash res }
+        VersionedT $ modify $ \s -> s { root = rooth' }
         pure $ Just (t, entry)
 
   replaceH path valueh = do
     rooth <- getRoot
-    m_res <- Store.setH path (pure valueh) rooth
+    m_res <- Store.setH path valueh rooth
     case m_res of
       Nothing -> pure Nothing
-      Just res -> do
-        let entry = Replace path (Store.targetHash res) (Store.valueHash res)
+      Just (rooth', oldh) -> do
+        let entry = Replace path oldh valueh
         t <- append entry
-        VersionedT . modify $ \s -> s { root = Store.rootHash res }
+        VersionedT . modify $ \s -> s { root = rooth' }
         pure $ Just (t, entry)
 
   insert :: (KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> VersionedT a m (Maybe (Time, Entry a))

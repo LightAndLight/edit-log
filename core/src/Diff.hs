@@ -15,6 +15,7 @@ import qualified Diff.SequenceDiff as SequenceDiff
 import Hash (Hash)
 import qualified Log
 import Node (Node(..))
+import NodeType (KnownNodeType)
 import Path (Level(..), Path(..), eqLevel)
 import qualified Path
 import Sequence (IsSequence, Item)
@@ -68,12 +69,12 @@ deriving instance Show (Diff a)
 emptyDiff :: Diff a
 emptyDiff = Empty
 
-applyChange :: MonadStore m => Path a b -> LeafChange b -> Hash a -> m (Maybe (Hash a))
+applyChange :: (KnownNodeType a, MonadStore m) => Path a b -> LeafChange b -> Hash a -> m (Maybe (Hash a))
 applyChange p c h =
   case c of
     ReplaceLeaf _ newInner -> do
-      m_res <- Store.setH p (pure newInner) h
-      pure $ Store.rootHash <$> m_res
+      m_res <- Store.setH p newInner h
+      pure $ fst <$> m_res
     EditSequenceLeaf changes ->
       Store.modifyH
         p
@@ -108,7 +109,7 @@ editSequenceBranchChange newChanges existingBranchChange =
     EditSequenceBranch existingChanges ->
       pure . EditSequenceBranch $ SequenceDiff.after newChanges existingChanges
 
-insert :: MonadStore m => Path a b -> LeafChange b -> Diff a -> m (Diff a)
+insert :: (KnownNodeType a, MonadStore m) => Path a b -> LeafChange b -> Diff a -> m (Diff a)
 insert p c currentDiff =
   case p of
     Nil ->
@@ -128,15 +129,15 @@ insert p c currentDiff =
     Cons l p' ->
       case currentDiff of
         Empty -> do
-          entry <- Entry l <$> insert p' c emptyDiff
+          entry <- Entry l <$> Path.withKnownLevelTarget l (insert p' c emptyDiff)
           pure $ Branch Nothing (pure entry)
         Branch branchChange entries ->
           case getEntry l entries of
             Nothing -> do
-              entry <- Entry l <$> insert p' c emptyDiff
+              entry <- Entry l <$> Path.withKnownLevelTarget l (insert p' c emptyDiff)
               pure $ Branch branchChange (NonEmpty.cons entry entries)
             Just m' -> do
-              m'' <- insert p' c m'
+              m'' <- Path.withKnownLevelTarget l (insert p' c m')
               let entries' = setEntry l m'' entries
               pure $ Branch branchChange entries'
         Leaf cOuter ->
@@ -157,7 +158,7 @@ insert p c currentDiff =
                 _ -> pure currentDiff
 
 changeSequenceDiff ::
-  (MonadStore m, IsSequence a) =>
+  (KnownNodeType a, MonadStore m, IsSequence a) =>
   Level a (Item a) ->
   Int ->
   Path (Item a) b ->
@@ -170,10 +171,10 @@ changeSequenceDiff l ix path newChange currentDiff currentSequenceDiff =
     SequenceDiff.Unknown -> do
       -- there is an insert change, but there also needs to be other changes applied to existing
       -- (non-inserted) args indices
-      entry <- Entry l <$> insert path newChange emptyDiff
+      entry <- Entry l <$> Path.withKnownLevelTarget l (insert path newChange emptyDiff)
       pure $ Branch (Just $ EditSequenceBranch currentSequenceDiff) (pure entry)
     SequenceDiff.Known statementh -> do
-      m_statementh' <- applyChange path newChange statementh
+      m_statementh' <- Path.withKnownLevelTarget l (applyChange path newChange statementh)
       pure $ case m_statementh' of
         Nothing -> currentDiff
         Just statementh' ->
@@ -207,7 +208,7 @@ traversal p f m =
             )
             ms
 
-toDiff :: MonadStore m => [Log.Entry a] -> m (Diff a)
+toDiff :: (KnownNodeType a, MonadStore m) => [Log.Entry a] -> m (Diff a)
 toDiff =
   foldlM
     (\acc entry ->
@@ -241,7 +242,7 @@ fromEditSequence path changes =
     []
     (SequenceDiff.toList changes)
 
-fromDiff :: forall a. Diff a -> [Log.Entry a]
+fromDiff :: forall a. KnownNodeType a => Diff a -> [Log.Entry a]
 fromDiff = go Nil
   where
     go :: forall b. Path a b -> Diff b -> [Log.Entry a]
