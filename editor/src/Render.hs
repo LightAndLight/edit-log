@@ -490,10 +490,12 @@ renderNode dInFocus dError dHovered dmNode = do
                   (\case; Def_Name -> Just (Refl, Refl); _ -> Nothing)
                   Def_Name
                   (renderNodeHash name)
+                syntaxLParen mempty
                 down
                   (\case; Def_Args -> Just (Refl, Refl); _ -> Nothing)
                   Def_Args
                   (renderNodeHash args)
+                syntaxRParen mempty
                 syntaxColon mempty
               syntaxNested mempty $
                 down
@@ -592,7 +594,6 @@ renderNode dInFocus dError dHovered dmNode = do
                   (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
             NParams xs -> do
               syntaxInline mempty $ do
-                syntaxLParen mempty
                 traverse_
                   (\item ->
                     case item of
@@ -605,7 +606,6 @@ renderNode dInFocus dError dHovered dmNode = do
                           (renderNodeHash x)
                   )
                   (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
-                syntaxRParen mempty
             NSHole ->
               syntaxHole mempty
             NEHole ->
