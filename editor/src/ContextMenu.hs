@@ -85,6 +85,7 @@ selectParser =
     TIdent -> Parser.ident
     TArgs -> Parser.args
     TParams -> Parser.params
+    TExprs -> Parser.exprs
 
 contextMenuEntries ::
   forall t m a b.
@@ -161,6 +162,12 @@ contextMenuEntries controls path = do
                 Right val ->
                   [(inputValue, Right val)]
             TParams ->
+              case parseResult of
+                Left{} ->
+                  []
+                Right val ->
+                  [(inputValue, Right val)]
+            TExprs ->
               case parseResult of
                 Left{} ->
                   []

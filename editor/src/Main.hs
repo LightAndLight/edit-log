@@ -293,6 +293,9 @@ editor initial initialFocus = do
                               Path.UnsnocMore prefix (Args_Index ix) -> do
                                 _ <- Versioned.delete prefix ix
                                 pure ()
+                              Path.UnsnocMore prefix (Exprs_Index ix) -> do
+                                _ <- Versioned.delete prefix ix
+                                pure ()
                               _ -> pure ()
                           _ -> do
                             _ <- Versioned.replace path EHole
@@ -363,6 +366,9 @@ editor initial initialFocus = do
                           NEHole ->
                             case Path.unsnoc path of
                               Path.UnsnocMore _ Args_Index{} ->
+                                Maybe.fromMaybe (esFocus editorState) $
+                                Navigation.findNextHole versioned' path hash
+                              Path.UnsnocMore _ Exprs_Index{} ->
                                 Maybe.fromMaybe (esFocus editorState) $
                                 Navigation.findNextHole versioned' path hash
                               _ -> esFocus editorState

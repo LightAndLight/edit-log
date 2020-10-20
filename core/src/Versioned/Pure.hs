@@ -123,12 +123,12 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         VersionedT . modify $ \s -> s { root = rooth' }
         pure $ Just (t, entry)
 
-  insert :: (KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> VersionedT a m (Maybe (Time, Entry a))
+  insert :: (KnownNodeType a, KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> VersionedT a m (Maybe (Time, Entry a))
   insert path (ix, x) = do
     xh <- Store.addKnownNode x
     insertH path (ix, xh)
 
-  insertH :: IsSequence b => Path a b -> (Int, Hash (Item b)) -> VersionedT a m (Maybe (Time, Entry a))
+  insertH :: (KnownNodeType a, IsSequence b) => Path a b -> (Int, Hash (Item b)) -> VersionedT a m (Maybe (Time, Entry a))
   insertH path (ix, xh) = do
     rooth <- getRoot
     m_rooth' <- Store.insertH path [(ix, [xh])] rooth

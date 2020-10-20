@@ -31,13 +31,13 @@ data Entry a where
     Hash b -> -- new
     Entry a
   Insert ::
-    IsSequence b =>
+    (KnownNodeType a, IsSequence b) =>
     Path a b ->
     Int ->
     Hash (Item b) -> -- new
     Entry a
   Delete ::
-    IsSequence b =>
+    (KnownNodeType a, IsSequence b) =>
     Path a b ->
     Int ->
     Hash (Item b) -> -- old

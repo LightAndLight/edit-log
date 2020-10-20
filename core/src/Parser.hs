@@ -5,6 +5,7 @@ module Parser
   , expr
   , ident
   , simpleStatement
+  , exprs
   , args
   , params
   )
@@ -15,7 +16,7 @@ import Text.Parser.Combinators (between, eof, sepBy)
 import Text.Parser.Char (CharParsing, alphaNum, char, digit, lower, string, spaces)
 import Text.ParserCombinators.ReadP (ReadP, readP_to_S)
 
-import Syntax (Block(..), Expr(..), Ident(..), Statement(..), BinOp(..), UnOp(..), Args(..), Params(..))
+import Syntax (Block(..), Expr(..), Ident(..), Statement(..), BinOp(..), UnOp(..), Args(..), Params(..), Exprs(..))
 
 type Parser = ReadP
 
@@ -65,7 +66,12 @@ expr = orOp
       bool <|>
       int <|>
       EIdent <$> identifier <|>
+      elist <|>
       hole
+
+    elist =
+      List <$>
+      between (token $ char '[') (token $ char ']') exprs
 
     bool =
       Bool True <$ string "true" <|>
@@ -130,6 +136,9 @@ args = Args <$> list expr
 
 params :: CharParsing m => m Params
 params = Params <$> list ident
+
+exprs :: CharParsing m => m Exprs
+exprs = Exprs <$> list expr
 
 list :: CharParsing m => m a -> m [a]
 list ma = (ma `sepBy` token (char ','))

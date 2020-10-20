@@ -10,7 +10,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 
 import Syntax
-  (Block(..), Expr(..), Ident(..), Statement(..), UnOp(..), BinOp(..), Params(..))
+  (Block(..), Expr(..), Ident(..), Statement(..), UnOp(..), BinOp(..), Params(..), Exprs(..))
 
 baseExprCompletions :: [(Text, Expr)]
 baseExprCompletions =
@@ -25,6 +25,7 @@ baseExprCompletions =
   , ("? == ?", BinOp Eq EHole EHole)
   , ("? and ?", BinOp And EHole EHole)
   , ("? or ?", BinOp Or EHole EHole)
+  , ("[?]", List $ Exprs [EHole])
   ]
 
 baseStatementCompletions :: [(Text, Statement)]

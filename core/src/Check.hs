@@ -153,6 +153,13 @@ check path hash = do
     NCall func args -> do
       check (Path.snoc path Call_Function) func
       check (Path.snoc path Call_Args) args
+    NList exprsHash -> do
+      exprsNode <- getNode exprsHash
+      case exprsNode of
+        NExprs exprs ->
+          let path' = Path.snoc path List_Exprs in
+          traverse_ (\(ix, st) -> check (Path.snoc path' $ Exprs_Index ix) st) $
+          zip [0..] exprs
     NEIdent i -> do
       mEntry <- lookupScopeEntry i
       case mEntry of
@@ -164,6 +171,10 @@ check path hash = do
       zip [0..] (NonEmpty.toList sts)
 
     NIdent{} -> pure ()
+
+    NExprs xs ->
+      traverse_ (\(ix, st) -> check (Path.snoc path $ Exprs_Index ix) st) $
+      zip [0..] xs
 
     NArgs xs ->
       traverse_ (\(ix, st) -> check (Path.snoc path $ Args_Index ix) st) $

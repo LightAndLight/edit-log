@@ -9,9 +9,6 @@
 {-# options_ghc -fno-warn-overlapping-patterns #-}
 module Path where
 
-import Control.Lens.Fold ((^?))
-import Control.Lens.Prism (Prism')
-import Control.Lens.Review (review)
 import Control.Lens.TH (makePrisms)
 import Control.Monad (guard)
 import Data.Constraint.Extras.TH (deriveArgDict)
@@ -27,7 +24,7 @@ import NodeType (KnownNodeType, nodeType)
 import qualified NodeType
 import Syntax
   ( Expr(..), Statement(..), Block(..), Ident, Args(..), Params(..)
-  , _Args, _Params
+  , Exprs(..)
   )
 
 data Level :: * -> * -> * where
@@ -57,6 +54,10 @@ data Level :: * -> * -> * where
 
   Call_Function :: Level Expr Expr
   Call_Args :: Level Expr Args
+
+  List_Exprs :: Level Expr Exprs
+
+  Exprs_Index :: Int -> Level Exprs Expr
 
   Block_Index :: Int -> Level Block Statement
 
@@ -143,6 +144,16 @@ eqLevel l1 l2 =
     Call_Args ->
       case l2 of
         Call_Args -> Just Refl
+        _ -> Nothing
+    List_Exprs ->
+      case l2 of
+        List_Exprs -> Just Refl
+        _ -> Nothing
+    Exprs_Index n ->
+      case l2 of
+        Exprs_Index n' -> do
+          guard $ n == n'
+          pure Refl
         _ -> Nothing
     Block_Index n ->
       case l2 of
@@ -243,6 +254,18 @@ instance GCompare (Level a) where
   gcompare Call_Args _ = GLT
   gcompare _ Call_Args = GGT
 
+  gcompare List_Exprs List_Exprs = GEQ
+  gcompare List_Exprs _ = GLT
+  gcompare _ List_Exprs = GGT
+
+  gcompare (Exprs_Index ix) (Exprs_Index ix') =
+    case compare ix ix' of
+      LT -> GLT
+      EQ -> GEQ
+      GT -> GGT
+  gcompare Exprs_Index{} _ = GLT
+  gcompare _ Exprs_Index{} = GGT
+
   gcompare (Block_Index ix) (Block_Index ix') =
     case compare ix ix' of
       LT -> GLT
@@ -341,6 +364,21 @@ downLevel level a =
     Call_Args ->
       case a of
         Call func args -> Just (args, \args' -> Call func args')
+        _ -> Nothing
+    List_Exprs ->
+      case a of
+        List xs -> Just (xs, \xs' -> List xs')
+        _ -> Nothing
+    Exprs_Index ix ->
+      case a of
+        Exprs xs | 0 <= ix && ix < length xs ->
+          let
+            (prefix, suffix) = splitAt ix xs
+          in
+            case suffix of
+              [] -> error "impossible"
+              x : rest ->
+                Just (x, \x' -> Exprs $ prefix ++ x' : rest)
         _ -> Nothing
     Block_Index ix ->
       case a of
@@ -451,6 +489,21 @@ downLevelNode level a =
       case a of
         NCall func args -> Just (args, \args' -> NCall func args')
         _ -> Nothing
+    List_Exprs ->
+      case a of
+        NList xs -> Just (xs, \xs' -> NList xs')
+        _ -> Nothing
+    Exprs_Index ix ->
+      case a of
+        NExprs xs | 0 <= ix && ix < length xs ->
+          let
+            (prefix, suffix) = splitAt ix xs
+          in
+            case suffix of
+              [] -> error "impossible"
+              x : rest ->
+                Just (x, \x' -> NExprs $ prefix ++ x' : rest)
+        _ -> Nothing
     Block_Index ix ->
       case a of
         NBlock sts | 0 <= ix && ix < length sts ->
@@ -550,159 +603,10 @@ traversal p f a =
   case p of
     Nil -> f a
     Cons l p' ->
-      case l of
-        For_Ident ->
-          case a of
-            For ident expr block ->
-              (\ident' -> For ident' expr block) <$>
-              traversal p' f ident
-            _ -> pure a
-        For_Expr ->
-          case a of
-            For ident expr block ->
-              (\expr' -> For ident expr' block) <$>
-              traversal p' f expr
-            _ -> pure a
-        For_Block ->
-          case a of
-            For ident expr block ->
-              (\block' -> For ident expr block') <$>
-              traversal p' f block
-            _ -> pure a
-
-        IfThen_Cond ->
-          case a of
-            IfThen cond then_ ->
-              (\cond' -> IfThen cond' then_) <$>
-              traversal p' f cond
-            _ -> pure a
-        IfThen_Then ->
-          case a of
-            IfThen cond then_ ->
-              (\then_' -> IfThen cond then_') <$>
-              traversal p' f then_
-            _ -> pure a
-
-        IfThenElse_Cond ->
-          case a of
-            IfThenElse cond then_ else_ ->
-              (\cond' -> IfThenElse cond' then_ else_) <$>
-              traversal p' f cond
-            _ -> pure a
-        IfThenElse_Then ->
-          case a of
-            IfThenElse cond then_ else_ ->
-              (\then_' -> IfThenElse cond then_' else_) <$>
-              traversal p' f then_
-            _ -> pure a
-        IfThenElse_Else ->
-          case a of
-            IfThenElse cond then_ else_ ->
-              (\else_' -> IfThenElse cond then_ else_') <$>
-              traversal p' f else_
-            _ -> pure a
-
-        Print_Value ->
-          case a of
-            Print val ->
-              Print <$>
-              traversal p' f val
-            _ -> pure a
-
-        Return_Value ->
-          case a of
-            Return val ->
-              Return <$>
-              traversal p' f val
-            _ -> pure a
-
-        Def_Name ->
-          case a of
-            Def name args body ->
-              (\name' -> Def name' args body) <$>
-              traversal p' f name
-            _ -> pure a
-        Def_Args ->
-          case a of
-            Def name args body ->
-              (\args' -> Def name args' body) <$>
-              traversal p' f args
-            _ -> pure a
-        Def_Body ->
-          case a of
-            Def name args body ->
-              Def name args <$>
-              traversal p' f body
-            _ -> pure a
-
-        BinOp_Left ->
-          case a of
-            BinOp op left right ->
-              (\left' -> BinOp op left' right) <$>
-              traversal p' f left
-            _ -> pure a
-        BinOp_Right ->
-          case a of
-            BinOp op left right ->
-              (\right' -> BinOp op left right') <$>
-              traversal p' f right
-            _ -> pure a
-
-        UnOp_Value ->
-          case a of
-            UnOp op value ->
-              (\value' -> UnOp op value') <$>
-              traversal p' f value
-            _ -> pure a
-
-        Call_Function ->
-          case a of
-            Call func args ->
-              (\func' -> Call func' args) <$>
-              traversal p' f func
-            _ -> pure a
-        Call_Args ->
-          case a of
-            Call func args ->
-              (\args' -> Call func args') <$>
-              traversal p' f args
-            _ -> pure a
-
-        Block_Index n ->
-          case a of
-            Block sts | n >= 0, n < length sts ->
-              (\val ->
-                 let
-                   (prefix, suffix) = splitAt n $ NonEmpty.toList sts
-                 in
-                   Block $ foldr NonEmpty.cons (val NonEmpty.:| drop 1 suffix) prefix
-              ) <$>
-              traversal p' f (NonEmpty.toList sts !! n)
-            _ -> pure a
-
-        Args_Index n ->
-          traversalList _Args n p' f a
-
-        Params_Index n ->
-          traversalList _Params n p' f a
-
-traversalList ::
-  Prism' a [b] ->
-  Int ->
-  Path b c ->
-  forall f. Applicative f => (c -> f c) -> a -> f a
-traversalList _Ctor ix path f a =
-  case a ^? _Ctor of
-    Just xs | ix >= 0, ix < length xs ->
-      (\val ->
-         let
-           (prefix, suffix) = splitAt ix xs
-         in
-           review _Ctor $ prefix ++ val : drop 1 suffix
-      ) <$>
-      traversal path f (xs !! ix)
-    _ ->
-      pure a
+      case downLevel l a of
+        Nothing -> pure a
+        Just (a', mk) ->
+          mk <$> traversal p' f a'
 
 modify :: Path a b -> (b -> b) -> a -> a
 modify p f = runIdentity . traversal p (Identity . f)
@@ -731,6 +635,8 @@ withKnownLevelTarget l k =
     UnOp_Value -> k
     Call_Function -> k
     Call_Args -> k
+    List_Exprs -> k
+    Exprs_Index{} -> k
     Block_Index{} -> k
     Args_Index{} -> k
     Params_Index{} -> k

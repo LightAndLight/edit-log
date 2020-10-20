@@ -15,7 +15,7 @@ import Data.Type.Equality ((:~:)(..))
 
 import Hash (Hash(..))
 import NodeType (KnownNodeType)
-import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident, Args, Params)
+import Syntax (Expr, Statement, Block, UnOp, BinOp, Ident, Args, Params, Exprs)
 
 data Node :: * -> * where
   NFor :: Hash Ident -> Hash Expr -> Hash Block -> Node Statement
@@ -30,12 +30,14 @@ data Node :: * -> * where
   NBinOp :: BinOp -> Hash Expr -> Hash Expr -> Node Expr
   NUnOp :: UnOp -> Hash Expr -> Node Expr
   NCall :: Hash Expr -> Hash Args -> Node Expr
+  NList :: Hash Exprs -> Node Expr
   NEIdent :: String -> Node Expr
 
   NBlock :: NonEmpty (Hash Statement) -> Node Block
 
   NIdent :: String -> Node Ident
 
+  NExprs :: [Hash Expr] -> Node Exprs
   NArgs :: [Hash Expr] -> Node Args
   NParams :: [Hash Ident] -> Node Params
 
@@ -78,6 +80,8 @@ instance Hashable (Node a) where
       NParams hs -> hashWithSalt s (15::Int, hs)
       NReturn e -> hashWithSalt s (16::Int, e)
       NCall func args -> hashWithSalt s (17::Int, func, args)
+      NList xs -> hashWithSalt s (18::Int, xs)
+      NExprs xs -> hashWithSalt s (19::Int, xs)
 
 hashNode :: forall a. KnownNodeType a => Node a -> Hash a
 hashNode n =
@@ -94,10 +98,12 @@ hashNode n =
     NBinOp{} -> HExpr $ hash n
     NUnOp{} -> HExpr $ hash n
     NCall{} -> HExpr $ hash n
+    NList{} -> HExpr $ hash n
     NEIdent{} -> HExpr $ hash n
 
     NBlock{} -> HBlock $ hash n
 
+    NExprs{} -> HExprs $ hash n
     NArgs{} -> HArgs $ hash n
     NParams{} -> HParams $ hash n
 

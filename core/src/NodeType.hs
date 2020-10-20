@@ -11,7 +11,7 @@ import Data.GADT.Show.TH (deriveGShow)
 import Data.Hashable (Hashable(..))
 import Data.Type.Equality ((:~:))
 
-import Syntax (Block, Expr, Statement, Ident, Args, Params)
+import Syntax (Block, Expr, Statement, Ident, Args, Params, Exprs)
 
 data NodeType :: * -> * where
   TExpr :: NodeType Expr
@@ -20,6 +20,7 @@ data NodeType :: * -> * where
   TIdent :: NodeType Ident
   TArgs :: NodeType Args
   TParams :: NodeType Params
+  TExprs :: NodeType Exprs
 deriveGShow ''NodeType
 deriveGEq ''NodeType
 deriving instance Show (NodeType a)
@@ -32,6 +33,7 @@ instance Hashable (NodeType a) where
       TIdent -> hashWithSalt s (3::Int)
       TArgs -> hashWithSalt s (4::Int)
       TParams -> hashWithSalt s (5::Int)
+      TExprs -> hashWithSalt s (6::Int)
 
 eqNodeType :: NodeType a -> NodeType b -> Maybe (a :~: b)
 eqNodeType = geq
@@ -44,6 +46,7 @@ instance KnownNodeType Block where; nodeType = TBlock
 instance KnownNodeType Ident where; nodeType = TIdent
 instance KnownNodeType Args where; nodeType = TArgs
 instance KnownNodeType Params where; nodeType = TParams
+instance KnownNodeType Exprs where; nodeType = TExprs
 
 withNodeType :: NodeType a -> (KnownNodeType a => r) -> r
 withNodeType n k =
@@ -54,6 +57,7 @@ withNodeType n k =
     TIdent -> k
     TArgs -> k
     TParams -> k
+    TExprs -> k
 
 showingNodeType :: NodeType a -> (Show a => r) -> r
 showingNodeType nt k =
@@ -64,6 +68,7 @@ showingNodeType nt k =
     TIdent -> k
     TArgs -> k
     TParams -> k
+    TExprs -> k
 
 eqingNodeType :: NodeType a -> (Eq a => r) -> r
 eqingNodeType nt k =
@@ -74,3 +79,4 @@ eqingNodeType nt k =
     TIdent -> k
     TArgs -> k
     TParams -> k
+    TExprs -> k

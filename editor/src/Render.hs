@@ -107,6 +107,12 @@ syntaxLParen attrs = syntaxSymbol ("class" =: "syntax-paren" <> attrs) $ Dom.tex
 syntaxRParen :: DomBuilder t m => Attrs -> m ()
 syntaxRParen attrs = syntaxSymbol ("class" =: "syntax-paren" <> attrs) $ Dom.text ")"
 
+syntaxLBracket :: DomBuilder t m => Attrs -> m ()
+syntaxLBracket attrs = syntaxSymbol ("class" =: "syntax-paren" <> attrs) $ Dom.text "["
+
+syntaxRBracket :: DomBuilder t m => Attrs -> m ()
+syntaxRBracket attrs = syntaxSymbol ("class" =: "syntax-paren" <> attrs) $ Dom.text "]"
+
 syntaxColon :: DomBuilder t m => Attrs -> m ()
 syntaxColon attrs = syntaxSymbol ("class" =: "syntax-colon" <> attrs) $ Dom.text ":"
 
@@ -131,6 +137,8 @@ isHole n =
     NBinOp{} -> False
     NUnOp{} -> False
     NCall{} -> False
+    NList{} -> False
+    NExprs{} -> False
     NBlock{} -> False
     NIdent{} -> False
     NArgs{} -> False
@@ -375,6 +383,7 @@ renderNode dInFocus dError dHovered dmNode = do
               TIdent -> "class" =: "syntax-ident"
               TArgs -> "class" =: "syntax-args"
               TParams -> "class" =: "syntax-params"
+              TExprs -> "class" =: "syntax-exprs"
         )
         dmNode <>
       fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
@@ -530,10 +539,34 @@ renderNode dInFocus dError dHovered dmNode = do
                   (\case; Call_Function -> Just (Refl, Refl); _ -> Nothing)
                   Call_Function
                   (renderNodeHash func)
+                syntaxLParen mempty
                 down
                   (\case; Call_Args -> Just (Refl, Refl); _ -> Nothing)
                   Call_Args
                   (renderNodeHash args)
+                syntaxRParen mempty
+            NList exprs -> do
+              syntaxInline mempty $ do
+                syntaxLBracket mempty
+                down
+                  (\case; List_Exprs -> Just (Refl, Refl); _ -> Nothing)
+                  List_Exprs
+                  (renderNodeHash exprs)
+                syntaxRBracket mempty
+            NExprs xs ->
+              syntaxInline mempty $
+              traverse_
+                (\item ->
+                  case item of
+                    Nothing ->
+                      syntaxComma mempty
+                    Just (ix, x) ->
+                      down
+                        (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                        (Exprs_Index ix)
+                        (renderNodeHash x)
+                )
+                (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
             NBlock sts -> do
               traverse_
                 (\(ix, st) ->
@@ -545,7 +578,6 @@ renderNode dInFocus dError dHovered dmNode = do
                 (zip [0::Int ..] $ NonEmpty.toList sts)
             NArgs xs -> do
               syntaxInline mempty $ do
-                syntaxLParen mempty
                 traverse_
                   (\item ->
                     case item of
@@ -558,7 +590,6 @@ renderNode dInFocus dError dHovered dmNode = do
                           (renderNodeHash x)
                   )
                   (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
-                syntaxRParen mempty
             NParams xs -> do
               syntaxInline mempty $ do
                 syntaxLParen mempty

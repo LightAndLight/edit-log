@@ -222,7 +222,7 @@ toDiff =
     emptyDiff
 
 fromEditSequence ::
-  IsSequence b =>
+  (KnownNodeType a, IsSequence b) =>
   Path a b ->
   SequenceDiff (Hash (Item b)) ->
   [Log.Entry a]

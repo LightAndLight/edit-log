@@ -19,8 +19,8 @@ import Data.Monoid (Alt(..))
 import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
-import Node (Node(..), _NArgs, _NParams)
-import Path (Path(..), Level(..), _Args_Index, _Params_Index)
+import Node (Node(..), _NArgs, _NExprs, _NParams)
+import Path (Path(..), Level(..), _Args_Index, _Exprs_Index, _Params_Index)
 import qualified Path
 import qualified Store
 import qualified Versioned
@@ -70,6 +70,9 @@ findNextHole v = go
         NCall func args ->
           go (Path.snoc path Call_Function) func <|>
           go (Path.snoc path Call_Args) args
+        NList xs ->
+          go (Path.snoc path List_Exprs) xs
+        NExprs xs -> findNextHoleList _Exprs_Index v path xs
         NBlock sts ->
           getAlt $
           foldMap
@@ -217,6 +220,13 @@ searchTreeForward v context path h =
                 NCall _ args->
                   searchTreeForward v (Path.snoc context Call_Args) path' args
                 _ -> []
+            List_Exprs ->
+              case node of
+                NList exprs->
+                  searchTreeForward v (Path.snoc context List_Exprs) path' exprs
+                _ -> []
+            Exprs_Index ix ->
+              searchTreeForwardList _NExprs _Exprs_Index ix v context path' node
             Block_Index ix ->
               case node of
                 NBlock sts ->
@@ -300,6 +310,9 @@ findPrevHole v = go
         NCall func args ->
           go (Path.snoc path Call_Function) func <|>
           go (Path.snoc path Call_Args) args
+        NList exprs ->
+          go (Path.snoc path List_Exprs) exprs
+        NExprs xs -> findPrevHoleList _Exprs_Index v path xs
         NBlock sts ->
           getAlt $
           foldMap
@@ -446,6 +459,13 @@ searchTreeBackward v context path h =
                   searchTreeBackward v (Path.snoc context Call_Args) path' args <>
                   [ SearchEntry (Path.snoc context Call_Function) func ]
                 _ -> []
+            List_Exprs ->
+              case node of
+                NList exprs ->
+                  searchTreeBackward v (Path.snoc context List_Exprs) path' exprs
+                _ -> []
+            Exprs_Index ix ->
+              searchTreeBackwardList _NExprs _Exprs_Index ix v context path' node
             Block_Index ix ->
               case node of
                 NBlock sts ->

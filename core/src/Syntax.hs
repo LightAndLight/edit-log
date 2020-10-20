@@ -88,12 +88,22 @@ instance IsSequence Args where
   insertAt ix val (Args xs) = Args $ insertAt ix val xs
   insertAll def vals (Args xs) = Args $ insertAll def vals xs
 
+newtype Exprs = Exprs [Expr]
+  deriving (Eq, Show)
+
+instance IsSequence Exprs where
+  type Item Exprs = Expr
+  deleteAt ix (Exprs xs) = Exprs $ deleteAt ix xs
+  insertAt ix val (Exprs xs) = Exprs $ insertAt ix val xs
+  insertAll def vals (Exprs xs) = Exprs $ insertAll def vals xs
+
 data Expr
   = Bool Bool
   | Int Int
   | BinOp BinOp Expr Expr
   | UnOp UnOp Expr
   | Call Expr Args
+  | List Exprs
   | EIdent String
   | EHole
   deriving (Eq, Show)
