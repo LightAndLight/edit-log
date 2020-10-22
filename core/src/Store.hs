@@ -16,7 +16,8 @@ import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
 import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
-import Node (Node(..))
+import Node (Node(..), SequenceNode(..))
+import qualified Node
 import NodeType (KnownNodeType, NodeType(..), nodeType)
 import Path (Path(..))
 import qualified Path
@@ -112,20 +113,23 @@ delete path ix hash = do
     Nothing -> pure Nothing
     Just node ->
       case path of
-        Nil -> do
-          case node of
-            NBlock sts ->
-              Just . (, NonEmpty.toList sts !! ix) <$>
-              case deleteAt ix $ NonEmpty.toList sts of
-                [] ->
-                  addBlock $ Block (pure SHole)
-                st' : sts' ->
-                  addNode (NBlock (st' NonEmpty.:| sts'))
-            NArgs xs ->
-              Just . (, xs !! ix) <$> addNode (NArgs $ deleteAt ix xs)
-            NParams xs ->
-              Just . (, xs !! ix) <$> addNode (NParams $ deleteAt ix xs)
-            _ -> pure Nothing
+        Nil
+          | Just snode <- Node.toSequenceNode node -> do
+              case snode of
+                SNBlock sts ->
+                  Just . (, NonEmpty.toList sts !! ix) <$>
+                  case deleteAt ix $ NonEmpty.toList sts of
+                    [] ->
+                      addBlock $ Block (pure SHole)
+                    st' : sts' ->
+                      addNode (NBlock (st' NonEmpty.:| sts'))
+                SNArgs xs ->
+                  Just . (, xs !! ix) <$> addNode (NArgs $ deleteAt ix xs)
+                SNParams xs ->
+                  Just . (, xs !! ix) <$> addNode (NParams $ deleteAt ix xs)
+                SNExprs xs ->
+                  Just . (, xs !! ix) <$> addNode (NExprs $ deleteAt ix xs)
+          | otherwise -> pure Nothing
         Cons level path' ->
           case Path.downLevelNode level node of
             Nothing -> pure Nothing

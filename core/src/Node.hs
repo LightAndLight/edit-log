@@ -112,3 +112,38 @@ hashNode n =
     NSHole -> HStatement $ hash n
     NEHole -> HExpr $ hash n
     NIHole -> HIdent $ hash n
+
+data SequenceNode :: * -> *  where
+  SNBlock :: NonEmpty (Hash Statement) -> SequenceNode Block
+  SNArgs :: [Hash Expr] -> SequenceNode Args
+  SNParams :: [Hash Ident] -> SequenceNode Params
+  SNExprs :: [Hash Expr] -> SequenceNode Exprs
+
+toSequenceNode :: forall a. Node a -> Maybe (SequenceNode a)
+toSequenceNode node =
+  case node of
+    NFor{} -> Nothing
+    NIfThen{} -> Nothing
+    NIfThenElse{} -> Nothing
+    NPrint{} -> Nothing
+    NReturn{} -> Nothing
+    NDef{} -> Nothing
+
+    NBool{} -> Nothing
+    NInt{} -> Nothing
+    NBinOp{} -> Nothing
+    NUnOp{} -> Nothing
+    NCall{} -> Nothing
+    NList{} -> Nothing
+    NEIdent{} -> Nothing
+
+    NBlock sts -> Just $ SNBlock sts
+    NExprs xs -> Just $ SNExprs xs
+    NArgs xs -> Just $ SNArgs xs
+    NParams xs -> Just $ SNParams xs
+
+    NIdent{} -> Nothing
+
+    NSHole -> Nothing
+    NEHole -> Nothing
+    NIHole -> Nothing
