@@ -222,7 +222,7 @@ toDiff =
     emptyDiff
 
 fromEditSequence ::
-  (KnownNodeType a, IsSequence b) =>
+  (KnownNodeType a, KnownNodeType b, IsSequence b) =>
   Path a b ->
   SequenceDiff (Hash (Item b)) ->
   [Log.Entry a]
@@ -245,7 +245,7 @@ fromEditSequence path changes =
 fromDiff :: forall a. KnownNodeType a => Diff a -> [Log.Entry a]
 fromDiff = go Nil
   where
-    go :: forall b. Path a b -> Diff b -> [Log.Entry a]
+    go :: forall b. KnownNodeType b => Path a b -> Diff b -> [Log.Entry a]
     go path d =
       case d of
         Empty -> []
@@ -260,4 +260,6 @@ fromDiff = go Nil
                  EditSequenceBranch changes -> fromEditSequence path changes
             )
             branchChange <>
-          (NonEmpty.toList entries >>= \(Entry level d') -> go (Path.snoc path level) d')
+          (NonEmpty.toList entries >>=
+           \(Entry level d') -> Path.withKnownLevelTarget level $ go (Path.snoc path level) d'
+          )

@@ -14,13 +14,35 @@ import Path (Path)
 import Sequence (IsSequence, Item)
 
 class Monad m => MonadVersioned a m | m -> a where
-  replace :: (KnownNodeType a, KnownNodeType b) => Path a b -> b -> m (Maybe (Time, Entry a))
-  replaceH :: KnownNodeType a => Path a b -> Hash b -> m (Maybe (Time, Entry a))
+  replace ::
+    (KnownNodeType a, KnownNodeType b) =>
+    Path a b ->
+    b ->
+    m (Maybe (Time, Entry a))
 
-  insert :: (KnownNodeType a, KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> m (Maybe (Time, Entry a))
-  insertH :: (KnownNodeType a, IsSequence b) => Path a b -> (Int, Hash (Item b)) -> m (Maybe (Time, Entry a))
+  replaceH ::
+    (KnownNodeType a, KnownNodeType b) =>
+    Path a b ->
+    Hash b ->
+    m (Maybe (Time, Entry a))
 
-  delete :: (KnownNodeType a, IsSequence b) => Path a b -> Int -> m (Maybe (Time, Entry a))
+  insert ::
+    (KnownNodeType a, KnownNodeType b, KnownNodeType (Item b), IsSequence b) =>
+    Path a b ->
+    (Int, Item b) ->
+    m (Maybe (Time, Entry a))
+
+  insertH ::
+    (KnownNodeType a, KnownNodeType b, IsSequence b) =>
+    Path a b ->
+    (Int, Hash (Item b)) ->
+    m (Maybe (Time, Entry a))
+
+  delete ::
+    (KnownNodeType a, KnownNodeType b, IsSequence b) =>
+    Path a b ->
+    Int ->
+    m (Maybe (Time, Entry a))
 
   snapshot :: m (Time, a)
 

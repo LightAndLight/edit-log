@@ -34,12 +34,13 @@ import qualified Check
 import Log (Entry, Time)
 import Node (Node(..))
 import NodeType (KnownNodeType, NodeType(..), nodeType)
-import Path (Path(..), Level(..))
+import Path (Path(..), Level(..), SomePath(..))
 import qualified Path
 import Path.Trie (Trie)
 import qualified Path.Trie as Trie
 import Syntax (Block(..), Statement(..), Expr(..), Ident(..))
 import Session (Session, newSession)
+import qualified Session
 import Session.Pure (runSessionT)
 import qualified Versioned
 import Versioned.Pure (Versioned, runVersionedT, newVersioned)
@@ -64,6 +65,8 @@ data DocumentKeys t
   , dkDown :: Event t ()
   , dkTab :: Event t ()
   , dkShiftTab :: Event t ()
+  , dkCtrlZ :: Event t ()
+  , dkCtrlShiftZ :: Event t ()
   , dkLetter :: EventSelector t (Const2 Char ())
   }
 
@@ -134,6 +137,24 @@ documentKeys = do
           )
           (current dHeld)
           eKeyDown
+    , dkCtrlZ =
+        attachWithMaybe
+          (\held pressed ->
+             if pressed == "z" && Set.member "Control" held
+             then Just ()
+             else Nothing
+          )
+          (current dHeld)
+          eKeyDown
+    , dkCtrlShiftZ =
+        attachWithMaybe
+          (\held pressed ->
+             if pressed == "Z" && Set.member "Control" held
+             then Just ()
+             else Nothing
+          )
+          (current dHeld)
+          eKeyDown
     , dkLetter =
         fanMap $
         fmapMaybe
@@ -153,11 +174,13 @@ data EditAction a where
   PrevHole :: EditAction a
   Delete :: FocusedNode a -> EditAction a
   SetFocus :: Focus a -> EditAction a
+  Undo :: EditAction a
+  Redo :: EditAction a
 
 data EditorState a
   = EditorState
   { esVersioned :: Versioned a
-  , esSession :: Session (Time, Entry a)
+  , esSession :: Session (Time, Entry a, SomePath a)
   , esFocus :: Focus a
   }
 
@@ -168,6 +191,8 @@ data DocumentControls t
   , dNewLineAbove :: Event t ()
   , dNewLineBelow :: Event t ()
   , dDelete :: Event t ()
+  , dUndo :: Event t ()
+  , dRedo :: Event t ()
   }
 
 editor ::
@@ -207,12 +232,14 @@ editor initial initialFocus = do
       , dNewLineAbove = select (dkLetter keys) (Const2 'O')
       , dNewLineBelow = select (dkLetter keys) (Const2 'o')
       , dDelete = dkDelete keys
+      , dUndo = dkCtrlZ keys
+      , dRedo = dkCtrlShiftZ keys
       }
 
     initialVersioned :: Versioned a
     initialVersioned = newVersioned initial
 
-    initialSession :: Session (Time, Entry a)
+    initialSession :: Session (Time, Entry a, SomePath a)
     initialSession = newSession
 
   rec
@@ -232,37 +259,64 @@ editor initial initialFocus = do
           )
           ((,) <$> bMenuClosed <*> current dFocusNode)
           (dDelete documentControls)
+      eUndo = gate bMenuClosed (Undo <$ dUndo documentControls)
+      eRedo = gate bMenuClosed (Redo <$ dRedo documentControls)
 
     (dVersioned, _dSession, dFocus) <-
       (\d -> (esVersioned <$> d, esSession <$> d, esFocus <$> d)) <$>
       foldDyn
         (\action editorState ->
             let
-              Identity (_, versioned', session') =
+              Identity (focus', versioned', session') =
                 runSessionT (esVersioned editorState) (esSession editorState) $
+                let focus = esFocus editorState in
                 case action of
+                  NextHole ->
+                    pure . Maybe.fromMaybe (esFocus editorState) $
+                    case esFocus editorState of
+                      Focus path ->
+                        nextHole versioned' path
+                      NoFocus ->
+                        nextHole versioned' Nil
+                  PrevHole ->
+                    pure . Maybe.fromMaybe (esFocus editorState) $
+                    case esFocus editorState of
+                      Focus path ->
+                        prevHole versioned' path
+                      NoFocus ->
+                        prevHole versioned' Nil
+                  SetFocus newFocus -> pure newFocus
                   Replace path val -> do
                     _ <- Versioned.replace path val
-                    pure ()
-                  InsertBefore | Focus path <- esFocus editorState ->
-                    case Path.unsnoc path of
-                      Path.UnsnocMore prefix final ->
-                        case final of
-                          Block_Index ix -> do
-                            _ <- Versioned.insert prefix (ix, SHole)
-                            pure ()
-                          _ -> pure ()
-                      Path.UnsnocEmpty -> pure ()
-                  InsertAfter | Focus path <- esFocus editorState ->
-                    case Path.unsnoc path of
-                      Path.UnsnocMore prefix final ->
-                        case final of
-                          Block_Index ix -> do
-                            _ <- Versioned.insert prefix (ix+1, SHole)
-                            pure ()
-                          _ -> pure ()
-                      Path.UnsnocEmpty -> pure ()
-                  Delete (FocusedNode path _ (node :: Node b)) ->
+                    pure . Maybe.fromMaybe (esFocus editorState) $ nextHole versioned' path
+                  InsertBefore
+                    | Focus path <- esFocus editorState ->
+                        case Path.unsnoc path of
+                          Path.UnsnocMore prefix final ->
+                            case final of
+                              Block_Index ix -> do
+                                _ <- Versioned.insert prefix (ix, SHole)
+                                pure $ Focus (Path.snoc prefix (Block_Index ix))
+                              _ ->
+                                pure focus
+                          Path.UnsnocEmpty ->
+                            pure focus
+                    | otherwise ->
+                        pure focus
+                  InsertAfter
+                    | Focus path <- esFocus editorState ->
+                        case Path.unsnoc path of
+                          Path.UnsnocMore prefix final ->
+                            case final of
+                              Block_Index ix -> do
+                                _ <- Versioned.insert prefix (ix+1, SHole)
+                                pure $ Focus (Path.snoc prefix (Block_Index $ ix+1))
+                              _ -> pure focus
+                          Path.UnsnocEmpty ->
+                            pure focus
+                    | otherwise ->
+                        pure focus
+                  Delete (FocusedNode path hash (node :: Node b)) ->
                     case nodeType @b of
                       TIdent ->
                         case node of
@@ -270,111 +324,62 @@ editor initial initialFocus = do
                             case Path.unsnoc path of
                               Path.UnsnocMore prefix (Params_Index ix) -> do
                                 _ <- Versioned.delete prefix ix
-                                pure ()
-                              _ -> pure ()
+                                pure .
+                                  Maybe.fromMaybe (esFocus editorState) $
+                                  Navigation.findNextHole versioned' path hash
+                              _ -> pure focus
                           _ -> do
                             _ <- Versioned.replace path IHole
-                            pure ()
+                            pure focus
                       TStatement ->
                         case node of
                           NSHole ->
                             case Path.unsnoc path of
                               Path.UnsnocMore prefix (Block_Index ix) -> do
                                 _ <- Versioned.delete prefix ix
-                                pure ()
-                              _ -> pure ()
+                                pure .
+                                  Maybe.fromMaybe (esFocus editorState) $
+                                  Navigation.findNextHole versioned' path hash
+                              _ -> pure focus
                           _ -> do
                             _ <- Versioned.replace path SHole
-                            pure ()
+                            pure focus
                       TExpr ->
                         case node of
                           NEHole ->
                             case Path.unsnoc path of
                               Path.UnsnocMore prefix (Args_Index ix) -> do
                                 _ <- Versioned.delete prefix ix
-                                pure ()
+                                pure .
+                                  Maybe.fromMaybe (esFocus editorState) $
+                                  Navigation.findNextHole versioned' path hash
                               Path.UnsnocMore prefix (Exprs_Index ix) -> do
                                 _ <- Versioned.delete prefix ix
-                                pure ()
-                              _ -> pure ()
+                                pure .
+                                  Maybe.fromMaybe (esFocus editorState) $
+                                  Navigation.findNextHole versioned' path hash
+                              _ -> pure focus
                           _ -> do
                             _ <- Versioned.replace path EHole
-                            pure ()
-                      _ -> pure ()
-                  _ -> pure ()
-              focus' =
-                case action of
-                  Replace path _ ->
-                    Maybe.fromMaybe (esFocus editorState) $
-                    nextHole versioned' path
-                  InsertBefore ->
-                    case esFocus editorState of
-                      Focus path ->
-                        case Path.unsnoc path of
-                          Path.UnsnocMore prefix final ->
-                            case final of
-                              Block_Index ix -> Focus (Path.snoc prefix (Block_Index ix))
-                              _ -> esFocus editorState
-                          Path.UnsnocEmpty -> esFocus editorState
-                      NoFocus -> NoFocus
-                  InsertAfter ->
-                    case esFocus editorState of
-                      Focus path ->
-                        case Path.unsnoc path of
-                          Path.UnsnocMore prefix final ->
-                            case final of
-                              Block_Index ix -> Focus (Path.snoc prefix (Block_Index $ ix+1))
-                              _ -> esFocus editorState
-                          Path.UnsnocEmpty -> esFocus editorState
-                      NoFocus -> NoFocus
-                  NextHole ->
-                    Maybe.fromMaybe (esFocus editorState) $
-                    case esFocus editorState of
-                      Focus path ->
-                        nextHole versioned' path
-                      NoFocus ->
-                        nextHole versioned' Nil
-                  PrevHole ->
-                    Maybe.fromMaybe (esFocus editorState) $
-                    case esFocus editorState of
-                      Focus path ->
-                        prevHole versioned' path
-                      NoFocus ->
-                        prevHole versioned' Nil
-                  Delete (FocusedNode path hash (node :: Node b)) ->
-                    case nodeType @b of
-                      TIdent ->
-                        case node of
-                          NIHole ->
-                            case Path.unsnoc path of
-                              Path.UnsnocMore _ Params_Index{} ->
-                                Maybe.fromMaybe (esFocus editorState) $
-                                Navigation.findNextHole versioned' path hash
-                              _ -> esFocus editorState
-                          _ -> esFocus editorState
-                      TStatement ->
-                        case node of
-                          NSHole ->
-                            case Path.unsnoc path of
-                              Path.UnsnocMore _ Block_Index{} ->
-                                Maybe.fromMaybe (esFocus editorState) $
-                                Navigation.findNextHole versioned' path hash
-                              _ -> esFocus editorState
-                          _ -> esFocus editorState
-                      TExpr ->
-                        case node of
-                          NEHole ->
-                            case Path.unsnoc path of
-                              Path.UnsnocMore _ Args_Index{} ->
-                                Maybe.fromMaybe (esFocus editorState) $
-                                Navigation.findNextHole versioned' path hash
-                              Path.UnsnocMore _ Exprs_Index{} ->
-                                Maybe.fromMaybe (esFocus editorState) $
-                                Navigation.findNextHole versioned' path hash
-                              _ -> esFocus editorState
-                          _ -> esFocus editorState
-                      _ -> esFocus editorState
-                  SetFocus newFocus -> newFocus
+                            pure focus
+                      _ ->
+                        pure focus
+                  Undo -> do
+                    mRes <- Session.undo
+                    pure $
+                      case mRes of
+                        Nothing ->
+                          focus
+                        Just (_, _, SomePath p) ->
+                          Focus p
+                  Redo -> do
+                    mRes <- Session.redo
+                    pure $
+                      case mRes of
+                        Nothing ->
+                          focus
+                        Just (_, _, SomePath p) ->
+                          Focus p
             in
               EditorState { esVersioned = versioned', esSession = session', esFocus = focus' }
         )
@@ -400,6 +405,8 @@ editor initial initialFocus = do
          , eInsertBefore
          , eInsertAfter
          , eDelete
+         , eUndo
+         , eRedo
          ]
         )
 

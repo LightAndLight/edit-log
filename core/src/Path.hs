@@ -543,6 +543,9 @@ data Path a :: * -> * where
   Cons :: Level a b -> Path b c -> Path a c
 deriving instance Show (Path a b)
 
+data SomePath a where
+  SomePath :: KnownNodeType b => Path a b -> SomePath a
+
 append :: Path a b -> Path b c -> Path a c
 append p1 p2 =
   case p1 of

@@ -24,7 +24,6 @@ import Versioned (MonadVersioned(..))
 import Log (MonadLog, Time, Entry(..), append, getPhysicalTime)
 import Log.Pure (LogT, runLogT, Log, newLog)
 import Path (Path(..))
-import Sequence (IsSequence, Item)
 import Store (MonadStore, rebuild)
 import qualified Store
 import Store.Pure (StoreT, runStoreT, Store, newStore)
@@ -95,7 +94,12 @@ newVersioned a = Versioned store newLog ctx
 instance Monad m => MonadVersioned a (VersionedT a m) where
   getRoot = VersionedT $ gets root
 
-  replace :: forall b. (KnownNodeType a, KnownNodeType b) => Path a b -> b -> VersionedT a m (Maybe (Time, Entry a))
+  replace ::
+    forall b.
+    (KnownNodeType a, KnownNodeType b) =>
+    Path a b ->
+    b ->
+    VersionedT a m (Maybe (Time, Entry a))
   replace path value = do
     rooth <- getRoot
     valh <- Store.addKnownNode @b value
@@ -123,12 +127,10 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         VersionedT . modify $ \s -> s { root = rooth' }
         pure $ Just (t, entry)
 
-  insert :: (KnownNodeType a, KnownNodeType (Item b), IsSequence b) => Path a b -> (Int, Item b) -> VersionedT a m (Maybe (Time, Entry a))
   insert path (ix, x) = do
     xh <- Store.addKnownNode x
     insertH path (ix, xh)
 
-  insertH :: (KnownNodeType a, IsSequence b) => Path a b -> (Int, Hash (Item b)) -> VersionedT a m (Maybe (Time, Entry a))
   insertH path (ix, xh) = do
     rooth <- getRoot
     m_rooth' <- Store.insertH path [(ix, [xh])] rooth
@@ -140,7 +142,6 @@ instance Monad m => MonadVersioned a (VersionedT a m) where
         VersionedT $ modify $ \s -> s { root = rooth' }
         pure $ Just (t, entry)
 
-  delete :: (KnownNodeType a, IsSequence b) => Path a b -> Int -> VersionedT a m (Maybe (Time, Entry a))
   delete path ix = do
     rooth <- getRoot
     mRes <- Store.delete path ix rooth

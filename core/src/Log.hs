@@ -25,19 +25,19 @@ tick (Time n) = Time (n+1)
 
 data Entry a where
   Replace ::
-    KnownNodeType a =>
+    (KnownNodeType a, KnownNodeType b) =>
     Path a b ->
     Hash b -> -- old
     Hash b -> -- new
     Entry a
   Insert ::
-    (KnownNodeType a, IsSequence b) =>
+    (KnownNodeType a, KnownNodeType b, IsSequence b) =>
     Path a b ->
     Int ->
     Hash (Item b) -> -- new
     Entry a
   Delete ::
-    (KnownNodeType a, IsSequence b) =>
+    (KnownNodeType a, KnownNodeType b, IsSequence b) =>
     Path a b ->
     Int ->
     Hash (Item b) -> -- old

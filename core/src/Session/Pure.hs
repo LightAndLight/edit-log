@@ -9,8 +9,10 @@ where
 
 import Control.Monad.State (StateT, runStateT, get, put)
 import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
 
 import Log (Time, Entry(..), MonadLog)
+import Path (SomePath(..))
 import Session (MonadSession(..), Session)
 import qualified Session
 import Store (MonadStore)
@@ -19,55 +21,70 @@ import Versioned.Pure (Versioned, VersionedT, runVersionedT)
 
 newtype SessionT a m b
   = SessionT
-  { unSessionT :: StateT (Session (Time, Entry a)) (VersionedT a m) b }
+  { unSessionT :: StateT (Session (Time, Entry a, SomePath a)) (VersionedT a m) b }
   deriving (Functor, Applicative, Monad, MonadLog a, MonadStore)
 
 runSessionT ::
   Monad m =>
   Versioned a ->
-  Session (Time, Entry a) ->
+  Session (Time, Entry a, SomePath a) ->
   SessionT a m b ->
-  m (b, Versioned a, Session (Time, Entry a))
+  m (b, Versioned a, Session (Time, Entry a, SomePath a))
 runSessionT v s m = do
   ((res, s'), v') <- runVersionedT v $ runStateT (unSessionT m) s
   pure (res, v', s')
 
 trackVersioned ::
   Monad m =>
-  VersionedT a m (Maybe (Time, Entry a)) ->
-  SessionT a m (Maybe (Time, Entry a))
+  MaybeT (VersionedT a m) (Time, Entry a, SomePath a) ->
+  MaybeT (SessionT a m) (Time, Entry a)
 trackVersioned m = do
-  m_result <- SessionT $ lift m
-  case m_result of
-    Nothing -> pure Nothing
-    Just result -> do
-      sess <- getSession
-      let (ix, sess') = Session.addChild result sess
-      case Session.down ix sess' of
-        Nothing -> error "impossible"
-        Just sess'' -> SessionT $ put sess''
-      pure $ Just result
+  result@(t, e, _) <- MaybeT . SessionT . lift . runMaybeT $ m
+  sess <- getSession
+  let (ix, sess') = Session.addChild result sess
+  case Session.down ix sess' of
+    Nothing -> error "impossible"
+    Just sess'' -> lift . SessionT $ put sess''
+  pure (t, e)
 
 instance Monad m => MonadVersioned a (SessionT a m) where
-  replace p a = trackVersioned $ replace p a
-  replaceH p h = trackVersioned $ replaceH p h
-  insert p h = trackVersioned $ insert p h
-  insertH p h = trackVersioned $ insertH p h
-  delete p ix = trackVersioned $ delete p ix
+  replace p a =
+    runMaybeT . trackVersioned $ do
+      (t, e) <- MaybeT $ replace p a
+      pure (t, e, SomePath p)
+
+  replaceH p h =
+    runMaybeT . trackVersioned $ do
+      (t, e) <- MaybeT $ replaceH p h
+      pure (t, e, SomePath p)
+
+  insert p h = do
+    runMaybeT . trackVersioned $ do
+      (t, e) <- MaybeT $ insert p h
+      pure (t, e, SomePath p)
+
+  insertH p h =
+    runMaybeT . trackVersioned $ do
+      (t, e) <- MaybeT $ insertH p h
+      pure (t, e, SomePath p)
+  delete p ix =
+    runMaybeT . trackVersioned $ do
+      (t, e) <- MaybeT $ delete p ix
+      pure (t, e, SomePath p)
 
   snapshot = SessionT $ lift snapshot
 
   getRoot = SessionT $ lift getRoot
 
-instance Monad m => MonadSession (Time, Entry a) (SessionT a m) where
+instance Monad m => MonadSession (Time, Entry a, SomePath a) (SessionT a m) where
   undo = do
     sess <- getSession
     case Session.up sess of
-      Nothing -> pure False
+      Nothing -> pure Nothing
       Just sess' -> do
         case Session.getFocus sess of
           Nothing -> error "impossible"
-          Just (_, entry) -> do
+          Just result@(_, entry, _) -> do
             SessionT $ put sess'
             case entry of
               Replace path old _ ->
@@ -79,30 +96,27 @@ instance Monad m => MonadSession (Time, Entry a) (SessionT a m) where
                 SessionT $ do
                   _ <- lift $ insertH path (ix, old)
                   pure ()
-            pure True
+            pure $ Just result
 
   redo = do
     sess <- getSession
-    if Session.numChildren sess == 1
-      then do
-        case Session.down 0 sess of
+    case Session.downGreatest (\(t, _, _) (t', _, _) -> compare t t') sess of
+      Nothing -> pure Nothing
+      Just sess' -> do
+        case Session.getFocus sess' of
           Nothing -> error "impossible"
-          Just sess' -> do
-            case Session.getFocus sess' of
-              Nothing -> error "impossible"
-              Just (_, entry) -> do
-                SessionT $ put sess'
-                case entry of
-                  Replace path _ new ->
-                    SessionT $ do
-                      _ <- lift $ replaceH path new
-                      pure ()
-                  Insert path ix new ->
-                    SessionT $ do
-                      _ <- lift $ insertH path (ix, new)
-                      pure ()
-                  Delete path ix _ -> error "TODO implement redo for delete" path ix
-                pure True
-      else pure False
+          Just result@(_, entry, _) -> do
+            SessionT $ put sess'
+            case entry of
+              Replace path _ new ->
+                SessionT $ do
+                  _ <- lift $ replaceH path new
+                  pure ()
+              Insert path ix new ->
+                SessionT $ do
+                  _ <- lift $ insertH path (ix, new)
+                  pure ()
+              Delete path ix _ -> error "TODO implement redo for delete" path ix
+            pure $ Just result
 
   getSession = SessionT get
