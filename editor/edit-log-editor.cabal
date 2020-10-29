@@ -16,6 +16,7 @@ library
                      , Focus
                      , Navigation
                      , Render
+                     , Svg
                      , Main
   build-depends:       base ^>=4.12.0.0
                      , edit-log-core

@@ -1,6 +1,7 @@
 {-# language GADTs, KindSignatures #-}
 {-# language FlexibleContexts #-}
 {-# language LambdaCase #-}
+{-# language OverloadedLists #-}
 {-# language OverloadedStrings #-}
 {-# language RecursiveDo #-}
 {-# language ScopedTypeVariables #-}
@@ -54,6 +55,7 @@ import Render
   , rniNodeEvent, rniFocusElement, rniFocusNode
   , renderNodeHash
   )
+import Svg (svgEl, svgElAttr)
 
 data DocumentKeys t
   = DocumentKeys
@@ -529,9 +531,9 @@ main = do
 
          inputFocus = "rgb(255,131,208)"
 
-         errorInactive = "#ff000060"
-         errorHovered = "#ff0000A0"
-         errorActive = "#ff0000"
+         -- errorInactive = "#ff000060"
+         -- errorHovered = "#ff0000A0"
+         -- errorActive = "#ff0000"
 
        Dom.el "style" . Dom.text $
          Text.unlines
@@ -590,15 +592,6 @@ main = do
          , ""
          , ".syntax-hovered.syntax-expr {"
          , "  box-shadow: inset 0 -1px 0 " <> holeHovered <> ";"
-         , "}"
-         , ""
-         , ".syntax-focused.syntax-expr.has-error {"
-         , "  box-shadow: none;"
-         , "}"
-         , ""
-         , ".syntax-hovered.syntax-expr.has-error {"
-         , "  box-shadow: none;"
-         , "  text-decoration-color: " <> errorHovered <> ";"
          , "}"
          , ""
          , ".syntax-focused.syntax-args {"
@@ -759,19 +752,15 @@ main = do
          , "#context-menu-input:focus {"
          , "  border: 1px solid " <> inputFocus <> ";"
          , "}"
-         , ""
-         , ".has-error {"
-         , "  text-decoration-line: underline;"
-         , "  text-decoration-style: wavy;"
-         , "  text-decoration-color: " <> errorInactive <> ";"
-         , "}"
-         , ""
-         , ".has-error.syntax-focused {"
-         , "  text-decoration-color: " <> errorActive <> ";"
-         , "}"
          ]
     )
-    (editor
-      (Block $ pure SHole)
-      (Focus $ Cons (Block_Index 0) Nil)
+    (do
+       svgElAttr "svg" [("style", "position: absolute; width: 10px; height: 10px;")] $ do
+         svgEl "defs" $ do
+           svgElAttr "pattern" [("id", "zig"), ("width", "5"), ("height", "2.5"), ("patternUnits", "userSpaceOnUse")]$ do
+             svgElAttr "line" [("x1", "0"), ("y1", "0"), ("x2", "2.5"), ("y2", "2.5"), ("stroke-width", "1"), ("stroke", "#ff0000"), ("fill", "none")] $ pure ()
+             svgElAttr "line" [("x1", "2.5"), ("y1", "2.5"), ("x2", "5"), ("y2", "0"), ("stroke-width", "1"), ("stroke", "#ff0000"), ("fill", "none")] $ pure ()
+       editor
+         (Block $ pure SHole)
+         (Focus $ Cons (Block_Index 0) Nil)
     )
