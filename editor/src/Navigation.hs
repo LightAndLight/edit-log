@@ -1,4 +1,5 @@
 {-# language GADTs #-}
+{-# language LambdaCase #-}
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving #-}

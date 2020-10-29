@@ -23,6 +23,7 @@ import Control.Monad.Reader (ReaderT, runReaderT)
 import Control.Monad.Trans.Maybe (MaybeT, runMaybeT)
 import Control.Monad.State (StateT, runStateT)
 import Data.Foldable (traverse_)
+import Data.GADT.Show (GShow(..))
 import qualified Data.List.NonEmpty as NonEmpty
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -59,6 +60,8 @@ newCheckEnv =
 data CheckError :: * -> * where
   NotInScope :: String -> CheckError Expr
 deriving instance Show (CheckError a)
+instance GShow CheckError where
+  gshowsPrec = showsPrec
 
 data CheckState a
   = CheckState

@@ -177,6 +177,9 @@ eqLevel l1 l2 =
 instance GEq (Level a) where
   geq = eqLevel
 
+-- | This GCompare instance should be in 'syntactic order', where
+-- one level is `LT` another if that position occurs earlier in the syntax tree.
+-- Used for finding next/prev errors
 instance GCompare (Level a) where
   gcompare For_Ident For_Ident = GEQ
   gcompare For_Ident _ = GLT

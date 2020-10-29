@@ -12,6 +12,7 @@ extra-source-files:  CHANGELOG.md
 library
   exposed-modules:     Attrs
                      , Autocomplete
+                     , BottomPanel
                      , ContextMenu
                      , Focus
                      , Navigation
@@ -20,7 +21,10 @@ library
                      , Main
   build-depends:       base ^>=4.12.0.0
                      , edit-log-core
+                     , bifunctors
                      , containers
+                     , dependent-map
+                     , dependent-sum
                      , ghcjs-dom
                      , jsaddle
                      , lens
