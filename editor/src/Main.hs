@@ -10,6 +10,7 @@
 {-# language TypeApplications #-}
 module Main where
 
+import Data.List.NonEmpty as NonEmpty
 import Control.Lens.Getter ((^.), view)
 import Control.Lens.TH (makeLenses)
 import Control.Monad (join, when)
@@ -874,7 +875,7 @@ main = do
              renderEditor
                keys
                editorControls
-               (Block $ pure SHole)
+               (Block . NonEmpty.fromList $ replicate 100 (IfThenElse EHole (Block $ pure SHole) (Block $ pure SHole)))
                (Focus $ Cons (Block_Index 0) Nil)
            bottomPanel <- renderBottomPanel (editor ^. eFocus) (editor ^. eErrors)
          pure ()

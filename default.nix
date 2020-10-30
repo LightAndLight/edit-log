@@ -1,6 +1,6 @@
-{ system ? builtins.currentSystem }:
-(import ./reflex-platform { inherit system; }).project ({ pkgs, ... }: {
-  useWarp = true;
+{ system ? builtins.currentSystem, reflex-platform ? import ./reflex-platform { inherit system; }, useWarp ? true }:
+reflex-platform.project ({ pkgs, ... }: {
+  inherit useWarp;
 
   packages = {
     edit-log-editor = ./editor;

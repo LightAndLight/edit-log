@@ -45,6 +45,7 @@ genNodeOf nt =
       pure $ NIdent i
     TArgs -> NArgs <$> Gen.list (Range.constant 0 10) (genHashOf TExpr)
     TParams -> NParams <$> Gen.list (Range.constant 0 10) (genHashOf TIdent)
+    TExprs -> NExprs <$> Gen.list (Range.constant 0 10) (genHashOf TExpr)
 
 data SomeNode where
   SomeNode :: KnownNodeType a => Node a -> SomeNode

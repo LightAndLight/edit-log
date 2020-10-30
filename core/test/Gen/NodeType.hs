@@ -30,6 +30,7 @@ genEqualNodeType (Some ty) =
     TIdent -> pure $ Some TIdent
     TArgs -> pure $ Some TArgs
     TParams -> pure $ Some TParams
+    TExprs -> pure $ Some TExprs
 
 genEqualNodeTypes :: Gen (Some NodeType, Some NodeType)
 genEqualNodeTypes =
@@ -40,4 +41,5 @@ genEqualNodeTypes =
   , (Some TIdent, Some TIdent)
   , (Some TArgs, Some TArgs)
   , (Some TParams, Some TParams)
+  , (Some TExprs, Some TExprs)
   ]

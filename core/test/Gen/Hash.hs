@@ -30,6 +30,7 @@ genHashOf ty = do
     TIdent -> HIdent n
     TArgs -> HArgs n
     TParams -> HParams n
+    TExprs -> HExprs n
 
 genHash :: Gen (Some Hash)
 genHash = do
@@ -49,4 +50,5 @@ genEqualHashes = do
     , (Some $ HIdent n, Some $ HIdent n)
     , (Some $ HArgs n, Some $ HArgs n)
     , (Some $ HParams n, Some $ HParams n)
+    , (Some $ HExprs n, Some $ HExprs n)
     ]

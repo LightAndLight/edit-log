@@ -24,6 +24,7 @@ module Render
 where
 
 import Control.Applicative ((<|>), liftA2)
+import Control.Lens.Indexed (itraverse_)
 import Control.Lens.Getter ((^.), view, views)
 import Control.Lens.Setter (ASetter, (.~))
 import Control.Lens.TH (makeClassy, makeLenses)
@@ -34,7 +35,6 @@ import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity(..))
 import qualified Data.List as List
-import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Maybe as Maybe
 import qualified Data.Text as Text
 import Data.Type.Equality ((:~:)(..))
@@ -255,8 +255,9 @@ renderNodeHash ::
   Hash b ->
   m ()
 renderNodeHash h = do
-  dError :: Dynamic t (Maybe (CheckError b)) <- views rnErrors $ fmap Trie.current
-  let dHasError = maybe False (const True) <$> dError
+  dHasError <-
+    holdUniqDyn =<<
+    views rnErrors (fmap $ maybe False (const True) . Trie.current)
 
   dInFocus <-
     holdUniqDyn =<<
@@ -291,9 +292,9 @@ renderNodeHash h = do
     let
       dmNode =
         (\versioned ->
-            let
-              Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
-            in
+           let
+             Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
+           in
               (,) h <$> mNode
         ) <$>
         dVersioned
@@ -623,14 +624,14 @@ renderNode dInFocus dHasError dHovered dmNode = do
             )
             (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
         NBlock sts -> do
-          traverse_
-            (\(ix, st) ->
+          itraverse_
+            (\ix st ->
               down
                 (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
                 (Block_Index ix)
                 (renderNodeHash st)
             )
-            (zip [0::Int ..] $ NonEmpty.toList sts)
+            sts
         NArgs xs -> do
           syntaxInline mempty $ do
             traverse_

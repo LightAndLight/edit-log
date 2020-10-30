@@ -47,6 +47,7 @@ genLevelFor nt =
     TBlock -> KnownLevel . Block_Index <$> Gen.int (Range.constant 0 maxBound)
     TArgs -> KnownLevel . Args_Index <$> Gen.int (Range.constant 0 maxBound)
     TParams -> KnownLevel . Params_Index <$> Gen.int (Range.constant 0 maxBound)
+    TExprs -> KnownLevel . Exprs_Index <$> Gen.int (Range.constant 0 maxBound)
     TIdent -> empty
 
 genPathFor :: forall a. NodeType a -> Gen (Some (Path a))

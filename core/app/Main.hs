@@ -1,5 +1,10 @@
 module Main where
 
+main :: IO ()
+main = pure ()
+
+{-
+
 import Data.Foldable (traverse_)
 import Data.Functor.Identity (Identity(..))
 
@@ -9,7 +14,7 @@ import qualified Log
 import Path (Path(..), Level(..))
 import Syntax (Expr(..), BinOp(..))
 import Versioned (replace, snapshot)
-import Versioned.Pure (Versioned, newVersioned, runVersionedT, debugLog)
+import Versioned.Pure (Versioned, newVersioned, runVersionedT) -- , debugLog)
 import Session (Session, newSession, undo, redo)
 import Session.Pure (runSessionT)
 
@@ -40,7 +45,9 @@ main = do
       diff <- Diff.toDiff es
       pure (diff, [v1, v2, v3, v4, v5, v6, v7])
   print v'
-  print $ debugLog v'
+  -- print $ debugLog v'
   print s'
   print diff
   traverse_ print vals
+
+-}
