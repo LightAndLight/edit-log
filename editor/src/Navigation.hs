@@ -297,9 +297,9 @@ findPrevHole v = go
         NReturn val ->
           go (Path.snoc path Return_Value) val
         NDef name args body ->
-          go (Path.snoc path Def_Name) name <|>
+          go (Path.snoc path Def_Body) body <|>
           go (Path.snoc path Def_Args) args <|>
-          go (Path.snoc path Def_Body) body
+          go (Path.snoc path Def_Name) name
         NBool{} -> Nothing
         NInt{} -> Nothing
         NEIdent{} -> Nothing

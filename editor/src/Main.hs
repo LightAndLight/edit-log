@@ -48,7 +48,7 @@ import Session.Pure (runSessionT)
 import qualified Versioned
 import Versioned.Pure (Versioned, runVersionedT, newVersioned)
 
-import BottomPanel (renderBottomPanel, bpNextError, bpPrevError)
+import BottomPanel (renderBottomPanel, bpNextError, bpPrevError, bpSetFocus)
 import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..), renderContextMenu)
 import Focus (Focus(..))
 import qualified Navigation
@@ -307,7 +307,7 @@ runEditAction action editorState =
   in
     EditorState { esVersioned = versioned', esSession = session', esFocus = focus' }
 
-data EditorControls t
+data EditorControls t a
   = EditorControls
   { ecNextHole :: Event t ()
   , ecPrevHole :: Event t ()
@@ -318,6 +318,7 @@ data EditorControls t
   , ecRedo :: Event t ()
   , ecNextError :: Event t ()
   , ecPrevError :: Event t ()
+  , ecSetFocus :: Event t (Focus a)
   }
 
 data Editor t a
@@ -338,7 +339,7 @@ renderEditor ::
   , Show a
   ) =>
   DocumentKeys t ->
-  EditorControls t ->
+  EditorControls t a ->
   a ->
   Focus a ->
   m (Editor t a)
@@ -367,6 +368,26 @@ renderEditor keys editorControls initial initialFocus =
     rec
       let
         bMenuClosed = (MenuClosed ==) <$> current dMenu
+        eReplace =
+          fmapMaybe
+            (\case
+              ContextMenuEvent event ->
+                case event of
+                  Choose path a -> Just $ Replace path a
+                  _ -> Nothing
+              _ -> Nothing
+            )
+            eNode
+        eSetFocus =
+          leftmost
+          [ SetFocus <$> ecSetFocus editorControls
+          , fmapMaybe
+              (\case
+                Select path -> Just . SetFocus $ Focus path
+                _ -> Nothing
+              )
+              eNode
+          ]
         eNextHole = gate bMenuClosed (NextHole <$ ecNextHole editorControls)
         ePrevHole = gate bMenuClosed (PrevHole <$ ecPrevHole editorControls)
         eInsertBefore = gate bMenuClosed (InsertBefore <$ ecNewLineAbove editorControls)
@@ -395,16 +416,8 @@ renderEditor keys editorControls initial initialFocus =
           }
           )
           (leftmost
-           [ fmapMaybe
-               (\case
-                 ContextMenuEvent event ->
-                   case event of
-                     Choose path a -> Just $ Replace path a
-                     _ -> Nothing
-                 Select path -> Just . SetFocus $ Focus path
-                 _ -> Nothing
-               )
-               eNode
+           [ eReplace
+           , eSetFocus
            , eNextHole
            , ePrevHole
            , eInsertBefore
@@ -503,17 +516,28 @@ main = do
        Dom.el "title" $ Dom.text "Editor"
        Dom.elAttr "link"
          ("rel" Dom.=: "stylesheet" <>
-          "href" Dom.=: "https://fonts.googleapis.com/css2?family=Source+Code+Pro:ital,wght@0,400;0,500;1,400&display=swap"
+          "href" Dom.=: "https://fonts.googleapis.com/css2?family=family=Source+Code+Pro:ital,wght@0,400;0,500;1,400&display=swap"
+         )
+         (pure ())
+       Dom.elAttr "link"
+         ("rel" Dom.=: "stylesheet" <>
+          "href" Dom.=: "https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@300;400&display=swap"
+         )
+         (pure ())
+       Dom.elAttr "link"
+         ("rel" Dom.=: "stylesheet" <>
+          "href" Dom.=: "https://cdn.jsdelivr.net/npm/remixicon@2.5.0/fonts/remixicon.css"
          )
          (pure ())
        let
-         bgColor = "#f8f8f8"
+         bgColor = "#f4f4f8"
+         bottomPanelBg = "#e4e4e8"
+         bottomPanelBorder = "#ccccd0"
+         contextMenuBg = bottomPanelBg
 
          keyword = "#354b98"
          literal = "#268884"
          symbol = "#974fbc"
-
-         contextMenuBg = "#ececec"
 
          holeInactiveText = "rgba(0, 0, 0, 0.3)"
          holeInactive = "rgba(0, 0, 0, 0.2)"
@@ -524,10 +548,10 @@ main = do
          holeActiveText = "rgba(0, 0, 0, 0.6)"
          holeActive = "#fb3abe"
 
-         nodeHoveredBg = "rgba(0, 0, 0, 0.025)"
+         nodeHoveredBg = "rgba(0, 0, 0, 0.045)"
          nodeHovered = "rgba(0, 0, 0, 0.4)"
 
-         nodeActiveBg = "rgba(0, 0, 0, 0.05)"
+         nodeActiveBg = "rgba(0, 0, 0, 0.08)"
          nodeActive = "#fb3abe"
 
          inputFocus = "rgb(255,131,208)"
@@ -539,17 +563,76 @@ main = do
        Dom.el "style" . Dom.text $
          Text.unlines
          [ "html {"
-         , "  font-family: 'Source Code Pro', monospace;"
+         , "  font-family: 'Source Sans Pro', sans-serif;"
          , "  background-color: " <> bgColor <> ";"
+         , "}"
+         , ""
+         , "body {"
+         , "  height: 100vh;"
+         , "}"
+         , ""
+         , "#content {"
+         , "  display: flex;"
+         , "  flex-direction: column;"
+         , "  height: 100%;"
+         , "}"
+         , ""
+         , "#editor {"
+         , "  font-family: 'Source Code Pro', monospace;"
+         , "  flex: 1;"
+         , "  padding: 1em;"
+         , "  height: 75vh;"
+         , "  overflow: scroll;"
+         , "  overflow-x: auto;"
+         , "  overflow-y: auto;"
+         , "}"
+         , ""
+         , "#bottom-panel {"
+         , "  border-top: 1px solid " <> bottomPanelBorder <> ";"
+         , "  background-color: " <> bottomPanelBg <> ";"
+         , "  height: 25vh;"
+         , "  color: #2f2f2f;"
+         , "}"
+         , ""
+         , "#bottom-panel-header {"
+         , "  padding-left: 1em;"
+         , "  padding-right: 1em;"
+         , "}"
+         , ""
+         , ".bottom-panel-header-item {"
+         , "  display: inline-block;"
+         , "  padding-top: 0.5em;"
+         , "  padding-bottom: 0.75em;"
+         , "}"
+         , ""
+         , ".bottom-panel-header-item-active {"
+         , "  padding-bottom: 0.25em;"
+         , "  box-shadow: inset 0 -2px 0 " <> holeActive <> ";"
+         , "}"
+         , ""
+         , "#bottom-panel-body {"
+         , "  padding-top: 0.5em;"
+         , "  padding-bottom: 0.5em;"
+         , "}"
+         , ""
+         , ".bottom-panel-error {"
+         , "  padding-left: 1em;"
+         , "  padding-right: 1em;"
+         , "  padding-top: 0.25em;"
+         , "  padding-bottom: 0.25em;"
+         , "}"
+         , ""
+         , ".bottom-panel-error-hovered {"
+         , "  background-color: " <> nodeHoveredBg <> ";"
+         , "}"
+         , ""
+         , ".bottom-panel-error-focused {"
+         , "  background-color: " <> nodeActiveBg <> ";"
          , "}"
          , ""
          , "body {"
          , "  width: 100%;"
          , "  margin: 0;"
-         , "}"
-         , ""
-         , "#editor {"
-         , "  margin: 1em;"
          , "}"
          , ""
          , "input {"
@@ -771,26 +854,28 @@ main = do
              svgElAttr "line" [("x1", "0"), ("y1", "0"), ("x2", "2.5"), ("y2", "2.5"), ("stroke-width", "1"), ("stroke", "#ff0000"), ("fill", "none")] $ pure ()
              svgElAttr "line" [("x1", "2.5"), ("y1", "2.5"), ("x2", "5"), ("y2", "0"), ("stroke-width", "1"), ("stroke", "#ff0000"), ("fill", "none")] $ pure ()
        keys <- documentKeys
-       rec
-         let
-           editorControls =
-             EditorControls
-             { ecNextHole = dkTab keys
-             , ecPrevHole = dkShiftTab keys
-             , ecNewLineAbove = select (dkLetter keys) (Const2 'O')
-             , ecNewLineBelow = select (dkLetter keys) (Const2 'o')
-             , ecDelete = dkDelete keys
-             , ecUndo = dkCtrlZ keys
-             , ecRedo = dkCtrlShiftZ keys
-             , ecNextError = bottomPanel ^. bpNextError
-             , ecPrevError = bottomPanel ^. bpPrevError
-             }
-         editor <-
-           renderEditor
-             keys
-             editorControls
-             (Block $ pure SHole)
-             (Focus $ Cons (Block_Index 0) Nil)
-         bottomPanel <- renderBottomPanel (editor ^. eFocus) (editor ^. eErrors)
-       pure ()
+       Dom.elAttr "div" [("id", "content")] $ do
+         rec
+           let
+             editorControls =
+               EditorControls
+               { ecNextHole = dkTab keys
+               , ecPrevHole = dkShiftTab keys
+               , ecNewLineAbove = select (dkLetter keys) (Const2 'O')
+               , ecNewLineBelow = select (dkLetter keys) (Const2 'o')
+               , ecDelete = dkDelete keys
+               , ecUndo = dkCtrlZ keys
+               , ecRedo = dkCtrlShiftZ keys
+               , ecNextError = bottomPanel ^. bpNextError
+               , ecPrevError = bottomPanel ^. bpPrevError
+               , ecSetFocus = bottomPanel ^. bpSetFocus
+               }
+           editor <-
+             renderEditor
+               keys
+               editorControls
+               (Block $ pure SHole)
+               (Focus $ Cons (Block_Index 0) Nil)
+           bottomPanel <- renderBottomPanel (editor ^. eFocus) (editor ^. eErrors)
+         pure ()
     )
