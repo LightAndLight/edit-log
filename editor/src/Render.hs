@@ -378,9 +378,13 @@ errorUnderline ::
   m a ->
   m ()
 errorUnderline dHasError m =
-  Dom.dyn_ $
-  dHasError <&> \hasError -> do
-    if hasError
+  -- Dom.dyn_ $ dHasError <&> drawWhenHasError
+  Dom.widgetHold_
+    (sample (current dHasError) >>= drawWhenHasError)
+    (drawWhenHasError <$> updated dHasError)
+  where
+    drawWhenHasError hasError =
+      if hasError
       then do
         (element, _) <- Dom.elAttr' "span" [("class", "error-target")] m
         eAfterPostBuild <- delay 0.05 =<< getPostBuild
@@ -388,7 +392,7 @@ errorUnderline dHasError m =
       else do
         _ <- m
         pure ()
-  where
+
     drawUnderline element = do
       rawElement :: HTMLElement <- GHCJS.DOM.unsafeCastTo HTMLElement (Dom._element_raw element)
       x <- ceiling <$> HTMLElement.getOffsetLeft rawElement
@@ -457,7 +461,10 @@ renderNode dInFocus dHasError dHovered dmNode = do
             dInFocus <*>
             dNode
 
-          Dom.dyn_ $ nodeDom . snd <$> dNode
+          -- Dom.dyn_ $ nodeDom . snd <$> dNode
+          Dom.widgetHold_
+            (sample (current dNode) >>= nodeDom . snd)
+            (nodeDom . snd <$> updated dNode)
 
   where
     nodeDom :: Node b -> m ()
