@@ -10,11 +10,11 @@
 {-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
 module Render
-  ( NodeControls(..), NodeEvent(..), NodeInfo(..), FocusedNode(..)
+  ( NodeControls(..), NodeEvent(..), FocusedNode(..)
   , RenderNodeEnv(..)
   , RenderNodeInfo(..)
   , rniNodeEvent
-  , rniNodeInfo
+  , rniHovered
   , rniFocusElement
   , rniFocusNode
   , renderNodeHash
@@ -23,7 +23,7 @@ module Render
   )
 where
 
-import Control.Applicative ((<|>), liftA2)
+import Control.Applicative ((<|>))
 import Control.Lens.Indexed (itraverse_)
 import Control.Lens.Getter ((^.), view, views)
 import Control.Lens.Setter (ASetter, (.~))
@@ -177,44 +177,32 @@ data NodeEvent a where
   ContextMenuEvent :: ContextMenuEvent a -> NodeEvent a
   Select :: KnownNodeType b => Path a b -> NodeEvent a
 
-data NodeInfo t
-  = NodeInfo
-  { _niHovered :: Dynamic t Bool
-  }
-makeLenses ''NodeInfo
-
-instance Reflex t => Semigroup (NodeInfo t) where
-  a <> b = NodeInfo { _niHovered = (||) <$> _niHovered a <*> _niHovered b }
-
-instance Reflex t => Monoid (NodeInfo t) where
-  mempty = NodeInfo { _niHovered = pure False }
-
 data FocusedNode a where
   FocusedNode :: KnownNodeType b => Path a b -> Hash b -> Node b -> FocusedNode a
 
 data RenderNodeInfo t a
   = RenderNodeInfo
   { _rniNodeEvent :: Event t (NodeEvent a)
-  , _rniNodeInfo :: NodeInfo t
-  , _rniFocusNode :: Dynamic t (Maybe (FocusedNode a))
-  , _rniFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
+  , _rniHovered :: Bool
+  , _rniFocusNode :: Maybe (FocusedNode a)
+  , _rniFocusElement :: Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)
   }
 makeLenses ''RenderNodeInfo
 instance Reflex t => Semigroup (RenderNodeInfo t a) where
   rni1 <> rni2 =
     RenderNodeInfo
     { _rniNodeEvent = leftmost [rni1 ^. rniNodeEvent, rni2 ^. rniNodeEvent]
-    , _rniNodeInfo = rni1 ^. rniNodeInfo <> rni2 ^. rniNodeInfo
-    , _rniFocusNode = liftA2 (<|>) (rni1 ^. rniFocusNode) (rni2 ^. rniFocusNode)
-    , _rniFocusElement = liftA2 (<|>) (rni1 ^. rniFocusElement) (rni2 ^. rniFocusElement)
+    , _rniHovered = (||) (_rniHovered rni1) (_rniHovered rni2)
+    , _rniFocusNode = (<|>) (rni1 ^. rniFocusNode) (rni2 ^. rniFocusNode)
+    , _rniFocusElement = (<|>) (rni1 ^. rniFocusElement) (rni2 ^. rniFocusElement)
     }
 instance Reflex t => Monoid (RenderNodeInfo t a) where
   mempty =
     RenderNodeInfo
     { _rniNodeEvent = never
-    , _rniNodeInfo = mempty
-    , _rniFocusNode = pure Nothing
-    , _rniFocusElement = pure Nothing
+    , _rniHovered = False
+    , _rniFocusNode = Nothing
+    , _rniFocusElement = Nothing
     }
 
 data RenderNodeEnv t a b
@@ -269,8 +257,7 @@ renderNodeHash h = do
       eMouseleave = switchDyn $ Dom.domEvent Dom.Mouseleave <$> dNodeElement
       eMousedown = switchDyn $ Dom.domEvent Dom.Mousedown <$> dNodeElement
 
-      dChildHovered =
-        dRenderNodeInfo >>= view (rniNodeInfo.niHovered)
+      dChildHovered = dRenderNodeInfo <&> view rniHovered
 
     dMouseInside <-
       case nodeType @b of
@@ -302,12 +289,6 @@ renderNodeHash h = do
       runDynamicWriterT $
       renderNode dInFocus dHasError dHovered dmNode
 
-  let
-    nodeInfo =
-      NodeInfo
-      { _niHovered = dMouseInside
-      }
-
   dMenu <- view rnMenu
   controls <- view rnNodeControls
   let
@@ -330,9 +311,9 @@ renderNodeHash h = do
   scribeDyn @t @(RenderNodeInfo t a) rniNodeEvent . pure $
     Select path <$ eClicked
 
-  scribeDyn @t @(RenderNodeInfo t a) rniNodeInfo $ pure nodeInfo
+  scribeDyn @t @(RenderNodeInfo t a) rniHovered dMouseInside
 
-  scribeDyn @t @(RenderNodeInfo t a) rniFocusElement . pure $
+  scribeDyn @t @(RenderNodeInfo t a) rniFocusElement $
     (\nodeElement inFocus -> if inFocus then Just nodeElement else Nothing) <$>
     dNodeElement <*>
     dInFocus
@@ -452,7 +433,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
         Nothing ->
           Dom.text "error: missing node"
         Just dNode -> do
-          scribeDyn @t @(RenderNodeInfo t a) rniFocusNode . pure $
+          scribeDyn @t @(RenderNodeInfo t a) rniFocusNode $
             (\inFocus (hash, node) ->
               if inFocus
               then Just $ FocusedNode path hash node

@@ -18,6 +18,7 @@ import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Trans.Class (lift)
 import Data.Char (isLetter)
+import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity(..))
 import Data.Functor.Misc (Const2(..))
 import qualified Data.Map as Map
@@ -490,14 +491,16 @@ renderEditor keys editorControls initial initialFocus =
       dRenderNodeHash' ::
         Dynamic t (RenderNodeInfo t a) <-
         join <$>
-        Dom.widgetHold (join . sample $ current dRenderNodeHash) (updated dRenderNodeHash)
+        Dom.widgetHold
+          (join . sample $ current dRenderNodeHash)
+          (updated dRenderNodeHash)
 
       let
         dFocusNode :: Dynamic t (Maybe (FocusedNode a))
-        dFocusNode = dRenderNodeHash' >>= view rniFocusNode
+        dFocusNode = dRenderNodeHash' <&> view rniFocusNode
 
         dFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
-        dFocusElement = dRenderNodeHash' >>= view rniFocusElement
+        dFocusElement = dRenderNodeHash' <&> view rniFocusElement
 
         eRenderNode :: Event t (NodeEvent a)
         eRenderNode = switchDyn $ view rniNodeEvent <$> dRenderNodeHash'
