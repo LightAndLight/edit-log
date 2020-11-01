@@ -56,7 +56,7 @@ import Focus (Focus(..))
 import qualified Navigation
 import Render
   ( NodeControls(..), NodeEvent(..), RenderNodeEnv(..), FocusedNode(..)
-  , rniNodeEvent, rniFocusElement, rniFocusNode
+  , rniFocusElement, rniFocusNode
   , renderNodeHash
   )
 import Svg (svgEl, svgElAttr)
@@ -478,11 +478,11 @@ renderEditor keys editorControls initial initialFocus =
           , _rnPath = Nil
           }
 
-      dRenderNodeHash' <- do
-        ((), dRenderNodeInfo) <-
-          runDynamicWriterT . flip runReaderT renderNodeEnv $
+      (dRenderNodeHash', eRenderNode) <- do
+        (((), dRenderNodeInfo), _eRenderNode) <-
+          runEventWriterT . runDynamicWriterT . flip runReaderT renderNodeEnv $
           renderNodeHash dRootHash
-        pure dRenderNodeInfo
+        pure (dRenderNodeInfo, _eRenderNode)
 
 {-
       dRenderNodeHash' ::
@@ -499,9 +499,6 @@ renderEditor keys editorControls initial initialFocus =
 
         dFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
         dFocusElement = dRenderNodeHash' <&> view rniFocusElement
-
-        eRenderNode :: Event t (NodeEvent a)
-        eRenderNode = switchDyn $ view rniNodeEvent <$> dRenderNodeHash'
 
       let eNode = leftmost [ContextMenuEvent <$> eContextMenu, eRenderNode]
 

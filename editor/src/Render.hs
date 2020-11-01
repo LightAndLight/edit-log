@@ -14,7 +14,6 @@ module Render
   ( NodeControls(..), NodeEvent(..), FocusedNode(..)
   , RenderNodeEnv(..)
   , RenderNodeInfo(..)
-  , rniNodeEvent
   , rniHovered
   , rniFocusElement
   , rniFocusNode
@@ -29,13 +28,16 @@ import Control.Lens.Indexed (itraverse_)
 import Control.Lens.Getter ((^.), view, views)
 import Control.Lens.Setter (ASetter, (.~))
 import Control.Lens.TH (makeClassy, makeLenses)
+import Control.Lens.Tuple (_1, _2, _3)
 import Control.Monad (join)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, ask)
+import qualified Data.Dependent.Map as DMap
 import Data.Foldable (traverse_)
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity(..))
+import Data.GADT.Compare (GEq(..), GCompare(..), GOrdering(..))
 import qualified Data.List as List
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
@@ -106,12 +108,13 @@ syntaxNodeD' attrs = Dom.elDynAttr' "div" . fmap unAttrs $ ("class" =: "syntax-n
 dynSyntaxNodeD' ::
   (DomBuilder t m, PostBuild t m, MonadHold t m) =>
   Dynamic t Attrs ->
-  Dynamic t (m a) ->
-  m (Dynamic t (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a))
-dynSyntaxNodeD' attrs dInput =
+  Dynamic t a ->
+  (a -> m b) ->
+  m (Dynamic t (Dom.Element Dom.EventResult (DomBuilderSpace m) t, b))
+dynSyntaxNodeD' attrs dInput f =
   Dom.widgetHold
-    (syntaxNodeD' attrs =<< sample (current dInput))
-    (syntaxNodeD' attrs <$> updated dInput)
+    (syntaxNodeD' attrs . f =<< sample (current dInput))
+    (syntaxNodeD' attrs . f <$> updated dInput)
 
 syntaxKeyword :: DomBuilder t m => Attrs -> m a -> m a
 syntaxKeyword attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-keyword" <> attrs
@@ -181,13 +184,15 @@ data NodeEvent a where
   ContextMenuEvent :: ContextMenuEvent a -> NodeEvent a
   Select :: KnownNodeType b => Path a b -> NodeEvent a
 
+instance Semigroup (NodeEvent a) where
+  l <> _ = l
+
 data FocusedNode a where
   FocusedNode :: KnownNodeType b => Path a b -> Hash b -> Node b -> FocusedNode a
 
 data RenderNodeInfo t a
   = RenderNodeInfo
-  { _rniNodeEvent :: Event t (NodeEvent a)
-  , _rniHovered :: Bool
+  { _rniHovered :: Bool
   , _rniFocusNode :: Maybe (FocusedNode a)
   , _rniFocusElement :: Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)
   }
@@ -195,16 +200,14 @@ makeLenses ''RenderNodeInfo
 instance Reflex t => Semigroup (RenderNodeInfo t a) where
   rni1 <> rni2 =
     RenderNodeInfo
-    { _rniNodeEvent = leftmost [rni1 ^. rniNodeEvent, rni2 ^. rniNodeEvent]
-    , _rniHovered = (||) (_rniHovered rni1) (_rniHovered rni2)
+    { _rniHovered = (||) (_rniHovered rni1) (_rniHovered rni2)
     , _rniFocusNode = (<|>) (rni1 ^. rniFocusNode) (rni2 ^. rniFocusNode)
     , _rniFocusElement = (<|>) (rni1 ^. rniFocusElement) (rni2 ^. rniFocusElement)
     }
 instance Reflex t => Monoid (RenderNodeInfo t a) where
   mempty =
     RenderNodeInfo
-    { _rniNodeEvent = never
-    , _rniHovered = False
+    { _rniHovered = False
     , _rniFocusNode = Nothing
     , _rniFocusElement = Nothing
     }
@@ -243,11 +246,11 @@ renderNodeHash ::
   , MonadReader r m
 
   , DynamicWriter t (RenderNodeInfo t a) m
+  , EventWriter t (NodeEvent a) m
   ) =>
   Dynamic t (Hash b) ->
   m ()
-renderNodeHash dHashRaw = do
-  dHash <- holdUniqDyn dHashRaw
+renderNodeHash dHash = do
   dHasError <-
     holdUniqDyn =<<
     views rnErrors (fmap $ maybe False (const True) . Trie.current)
@@ -297,6 +300,7 @@ renderNodeHash dHashRaw = do
 
   dMenu <- view rnMenu
   controls <- view rnNodeControls
+  path <- view rnPath
   let
     eOpenMenu =
       attachWithMaybe
@@ -304,18 +308,26 @@ renderNodeHash dHashRaw = do
         ((,) <$> current dInFocus <*> current dMenu)
         (ncOpenMenu controls)
 
+    eCloseMenu =
+      attachWithMaybe
+        (\menu () -> if menu == MenuOpen then Just CloseMenu else Nothing)
+        (current dMenu)
+        (ncCloseMenu controls)
+
+    eSelect =
+      Select path <$ eClicked
+
   tellDyn dRenderNodeInfo
 
   -- why do I get an overlapping instance error without the type applications?
+  tellEvent eOpenMenu
+  tellEvent eCloseMenu
+  tellEvent eSelect
+{-
   scribeDyn @t @(RenderNodeInfo t a) rniNodeEvent $ pure eOpenMenu
-  scribeDyn @t @(RenderNodeInfo t a) rniNodeEvent . pure $
-    attachWithMaybe
-      (\menu () -> if menu == MenuOpen then Just CloseMenu else Nothing)
-      (current dMenu)
-      (ncCloseMenu controls)
-  path <- view rnPath
-  scribeDyn @t @(RenderNodeInfo t a) rniNodeEvent . pure $
-    Select path <$ eClicked
+  scribeDyn @t @(RenderNodeInfo t a) rniNodeEvent $ pure eCloseMenu
+  scribeDyn @t @(RenderNodeInfo t a) rniNodeEvent $ pure eSelect
+-}
 
   scribeDyn @t @(RenderNodeInfo t a) rniHovered dMouseInside
 
@@ -387,6 +399,230 @@ errorUnderline dHasError m =
       width <- ceiling <$> HTMLElement.getOffsetWidth rawElement
       height <- ceiling <$> HTMLElement.getOffsetHeight rawElement
       svgUnderline (x, y + height) width
+
+data NodeTag :: * -> * -> * where
+  NTagFor :: NodeTag Statement (Hash Ident, Hash Expr, Hash Block)
+  NTagIfThen :: NodeTag Statement (Hash Expr, Hash Block)
+  NTagIfThenElse :: NodeTag Statement (Hash Expr, Hash Block, Hash Block)
+  NTagPrint :: NodeTag Statement (Hash Expr)
+  NTagReturn :: NodeTag Statement (Hash Expr)
+  NTagDef :: NodeTag Statement (Hash Ident, Hash Params, Hash Block)
+
+  NTagBool :: NodeTag Expr Bool
+  NTagInt :: NodeTag Expr Int
+  NTagBinOp :: NodeTag Expr (BinOp, Hash Expr, Hash Expr)
+  NTagUnOp :: NodeTag Expr (UnOp, Hash Expr)
+  NTagCall :: NodeTag Expr (Hash Expr, Hash Args)
+  NTagList :: NodeTag Expr (Hash Exprs)
+  NTagEIdent :: NodeTag Expr String
+
+  NTagBlock :: NodeTag Block (NonEmpty (Hash Statement))
+
+  NTagIdent :: NodeTag Ident String
+
+  NTagExprs :: NodeTag Exprs [Hash Expr]
+  NTagArgs :: NodeTag Args [Hash Expr]
+  NTagParams :: NodeTag Params [Hash Ident]
+
+  NTagSHole :: NodeTag Statement ()
+  NTagEHole :: NodeTag Expr ()
+  NTagIHole :: NodeTag Ident ()
+instance GEq (NodeTag a) where
+  geq NTagFor NTagFor = Just Refl
+  geq NTagFor _ = Nothing
+  geq _ NTagFor = Nothing
+
+  geq NTagIfThen NTagIfThen = Just Refl
+  geq NTagIfThen _ = Nothing
+  geq _ NTagIfThen = Nothing
+
+  geq NTagIfThenElse NTagIfThenElse = Just Refl
+  geq NTagIfThenElse _ = Nothing
+  geq _ NTagIfThenElse = Nothing
+
+  geq NTagPrint NTagPrint = Just Refl
+  geq NTagPrint _ = Nothing
+  geq _ NTagPrint = Nothing
+
+  geq NTagReturn NTagReturn = Just Refl
+  geq NTagReturn _ = Nothing
+  geq _ NTagReturn = Nothing
+
+  geq NTagDef NTagDef = Just Refl
+  geq NTagDef _ = Nothing
+  geq _ NTagDef = Nothing
+
+  geq NTagBool NTagBool = Just Refl
+  geq NTagBool _ = Nothing
+  geq _ NTagBool = Nothing
+
+  geq NTagInt NTagInt = Just Refl
+  geq NTagInt _ = Nothing
+  geq _ NTagInt = Nothing
+
+  geq NTagBinOp NTagBinOp = Just Refl
+  geq NTagBinOp _ = Nothing
+  geq _ NTagBinOp = Nothing
+
+  geq NTagUnOp NTagUnOp = Just Refl
+  geq NTagUnOp _ = Nothing
+  geq _ NTagUnOp = Nothing
+
+  geq NTagCall NTagCall = Just Refl
+  geq NTagCall _ = Nothing
+  geq _ NTagCall = Nothing
+
+  geq NTagList NTagList = Just Refl
+  geq NTagList _ = Nothing
+  geq _ NTagList = Nothing
+
+  geq NTagEIdent NTagEIdent = Just Refl
+  geq NTagEIdent _ = Nothing
+  geq _ NTagEIdent = Nothing
+
+  geq NTagBlock NTagBlock = Just Refl
+  geq NTagBlock _ = Nothing
+  geq _ NTagBlock = Nothing
+
+  geq NTagIdent NTagIdent = Just Refl
+  geq NTagIdent _ = Nothing
+  geq _ NTagIdent = Nothing
+
+  geq NTagExprs NTagExprs = Just Refl
+  geq NTagExprs _ = Nothing
+  geq _ NTagExprs = Nothing
+
+  geq NTagParams NTagParams = Just Refl
+  geq NTagParams _ = Nothing
+  geq _ NTagParams = Nothing
+
+  geq NTagArgs NTagArgs = Just Refl
+  geq NTagArgs _ = Nothing
+  geq _ NTagArgs = Nothing
+
+  geq NTagSHole NTagSHole = Just Refl
+  geq NTagSHole _ = Nothing
+  geq _ NTagSHole = Nothing
+
+  geq NTagEHole NTagEHole = Just Refl
+  geq NTagEHole _ = Nothing
+  geq _ NTagEHole = Nothing
+
+  geq NTagIHole NTagIHole = Just Refl
+  geq NTagIHole _ = Nothing
+  geq _ NTagIHole = Nothing
+instance GCompare (NodeTag a) where
+  gcompare NTagFor NTagFor = GEQ
+  gcompare NTagFor _ = GLT
+  gcompare _ NTagFor = GGT
+
+  gcompare NTagIfThen NTagIfThen = GEQ
+  gcompare NTagIfThen _ = GLT
+  gcompare _ NTagIfThen = GGT
+
+  gcompare NTagIfThenElse NTagIfThenElse = GEQ
+  gcompare NTagIfThenElse _ = GLT
+  gcompare _ NTagIfThenElse = GGT
+
+  gcompare NTagPrint NTagPrint = GEQ
+  gcompare NTagPrint _ = GLT
+  gcompare _ NTagPrint = GGT
+
+  gcompare NTagReturn NTagReturn = GEQ
+  gcompare NTagReturn _ = GLT
+  gcompare _ NTagReturn = GGT
+
+  gcompare NTagDef NTagDef = GEQ
+  gcompare NTagDef _ = GLT
+  gcompare _ NTagDef = GGT
+
+  gcompare NTagBool NTagBool = GEQ
+  gcompare NTagBool _ = GLT
+  gcompare _ NTagBool = GGT
+
+  gcompare NTagInt NTagInt = GEQ
+  gcompare NTagInt _ = GLT
+  gcompare _ NTagInt = GGT
+
+  gcompare NTagBinOp NTagBinOp = GEQ
+  gcompare NTagBinOp _ = GLT
+  gcompare _ NTagBinOp = GGT
+
+  gcompare NTagUnOp NTagUnOp = GEQ
+  gcompare NTagUnOp _ = GLT
+  gcompare _ NTagUnOp = GGT
+
+  gcompare NTagCall NTagCall = GEQ
+  gcompare NTagCall _ = GLT
+  gcompare _ NTagCall = GGT
+
+  gcompare NTagList NTagList = GEQ
+  gcompare NTagList _ = GLT
+  gcompare _ NTagList = GGT
+
+  gcompare NTagEIdent NTagEIdent = GEQ
+  gcompare NTagEIdent _ = GLT
+  gcompare _ NTagEIdent = GGT
+
+  gcompare NTagBlock NTagBlock = GEQ
+  gcompare NTagBlock _ = GLT
+  gcompare _ NTagBlock = GGT
+
+  gcompare NTagIdent NTagIdent = GEQ
+  gcompare NTagIdent _ = GLT
+  gcompare _ NTagIdent = GGT
+
+  gcompare NTagExprs NTagExprs = GEQ
+  gcompare NTagExprs _ = GLT
+  gcompare _ NTagExprs = GGT
+
+  gcompare NTagParams NTagParams = GEQ
+  gcompare NTagParams _ = GLT
+  gcompare _ NTagParams = GGT
+
+  gcompare NTagArgs NTagArgs = GEQ
+  gcompare NTagArgs _ = GLT
+  gcompare _ NTagArgs = GGT
+
+  gcompare NTagSHole NTagSHole = GEQ
+  gcompare NTagSHole _ = GLT
+  gcompare _ NTagSHole = GGT
+
+  gcompare NTagEHole NTagEHole = GEQ
+  gcompare NTagEHole _ = GLT
+  gcompare _ NTagEHole = GGT
+
+  gcompare NTagIHole NTagIHole = GEQ
+  gcompare NTagIHole _ = GLT
+  gcompare _ NTagIHole = GGT
+
+fanNode :: Reflex t => Event t (Node a) -> EventSelector t (NodeTag a)
+fanNode =
+  fan .
+  fmapCheap
+    (\case
+      NFor i e b -> DMap.singleton NTagFor $ pure (i, e, b)
+      NIfThen c t -> DMap.singleton NTagIfThen $ pure (c, t)
+      NIfThenElse c t e -> DMap.singleton NTagIfThenElse $ pure (c, t, e)
+      NPrint v -> DMap.singleton NTagPrint $ pure v
+      NReturn v -> DMap.singleton NTagReturn $ pure v
+      NDef n p b -> DMap.singleton NTagDef $ pure (n, p, b)
+      NBool b -> DMap.singleton NTagBool $ pure b
+      NInt n -> DMap.singleton NTagInt $ pure n
+      NBinOp op l r -> DMap.singleton NTagBinOp $ pure (op, l, r)
+      NUnOp op v -> DMap.singleton NTagUnOp $ pure (op, v)
+      NCall f x -> DMap.singleton NTagCall $ pure (f, x)
+      NList xs -> DMap.singleton NTagList $ pure xs
+      NEIdent i -> DMap.singleton NTagEIdent $ pure i
+      NBlock sts -> DMap.singleton NTagBlock $ pure sts
+      NIdent i -> DMap.singleton NTagIdent $ pure i
+      NExprs es -> DMap.singleton NTagExprs $ pure es
+      NArgs es -> DMap.singleton NTagArgs $ pure es
+      NParams es -> DMap.singleton NTagParams $ pure es
+      NSHole -> DMap.singleton NTagSHole $ pure ()
+      NEHole -> DMap.singleton NTagEHole $ pure ()
+      NIHole -> DMap.singleton NTagIHole $ pure ()
+    )
 
 data NodeD t :: * -> * where
   NForD ::
@@ -472,176 +708,177 @@ nodeDyn ::
   Dynamic t (Node a) ->
   m (Dynamic t (NodeD t a))
 nodeDyn dNode = do
+  let fanned = fanNode $ updated dNode
   rec
     dNodeD <-
       Dom.widgetHold
-        (inner dNode)
+        (inner fanned dNode)
         (attachWithMaybe
           (\now next ->
              case now of
                NForD{} ->
                  case next of
                    NFor{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NIfThenD{} ->
                  case next of
                    NIfThen{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NIfThenElseD{} ->
                  case next of
                    NIfThenElse{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NPrintD{} ->
                  case next of
                    NPrint{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NReturnD{} ->
                  case next of
                    NReturn{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NDefD{} ->
                  case next of
                    NDef{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NBoolD{} ->
                  case next of
                    NBool{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NIntD{} ->
                  case next of
                    NInt{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NBinOpD{} ->
                  case next of
                    NBinOp{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NUnOpD{} ->
                  case next of
                    NUnOp{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NCallD{} ->
                  case next of
                    NCall{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NListD{} ->
                  case next of
                    NList{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NEIdentD{} ->
                  case next of
                    NEIdent{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NBlockD{} ->
                  case next of
                    NBlock{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NIdentD{} ->
                  case next of
                    NIdent{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NExprsD{} ->
                  case next of
                    NExprs{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NArgsD{} ->
                  case next of
                    NArgs{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NParamsD{} ->
                  case next of
                    NParams{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NSHoleD{} ->
                  case next of
                    NSHole{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NEHoleD{} ->
                  case next of
                    NEHole{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
                NIHoleD{} ->
                  case next of
                    NIHole{} -> Nothing
-                   _ -> Just $ inner dNode
+                   _ -> Just $ inner fanned dNode
           )
           (current dNodeD)
           (updated dNode)
         )
   pure dNodeD
   where
-    inner :: Dynamic t (Node a) -> m (NodeD t a)
-    inner dNode' = do
+    inner :: EventSelector t (NodeTag a) -> Dynamic t (Node a) -> m (NodeD t a)
+    inner fanned dNode' = do
       node <- sample $ current dNode'
       case node of
         NFor i e b ->
           NForD <$>
-          uniqDyn i (fmapMaybe (\case; NFor i' _ _ -> Just i'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn e (fmapMaybe (\case; NFor _ e' _ -> Just e'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn b (fmapMaybe (\case; NFor _ _ b' -> Just b'; _ -> Nothing) (updated dNode'))
+          uniqDyn i (fmapCheap (view _1) (select fanned NTagFor)) <*>
+          uniqDyn e (fmapCheap (view _2) (select fanned NTagFor)) <*>
+          uniqDyn b (fmapCheap (view _3) (select fanned NTagFor))
         NIfThen c t ->
           NIfThenD <$>
-          uniqDyn c (fmapMaybe (\case; NIfThen c' _ -> Just c'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn t (fmapMaybe (\case; NIfThen _ t' -> Just t'; _ -> Nothing) (updated dNode'))
+          uniqDyn c (fmapCheap (view _1) (select fanned NTagIfThen)) <*>
+          uniqDyn t (fmapCheap (view _2) (select fanned NTagIfThen))
         NIfThenElse c t e ->
           NIfThenElseD <$>
-          uniqDyn c (fmapMaybe (\case; NIfThenElse c' _ _ -> Just c'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn t (fmapMaybe (\case; NIfThenElse _ t' _ -> Just t'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn e (fmapMaybe (\case; NIfThenElse _ _ e' -> Just e'; _ -> Nothing) (updated dNode'))
+          uniqDyn c (fmapCheap (view _1) (select fanned NTagIfThenElse)) <*>
+          uniqDyn t (fmapCheap (view _2) (select fanned NTagIfThenElse)) <*>
+          uniqDyn e (fmapCheap (view _3) (select fanned NTagIfThenElse))
         NPrint v ->
           NPrintD <$>
-          uniqDyn v (fmapMaybe (\case; NPrint v' -> Just v'; _ -> Nothing) (updated dNode'))
+          uniqDyn v (select fanned NTagPrint)
         NReturn v ->
           NReturnD <$>
-          uniqDyn v (fmapMaybe (\case; NReturn v' -> Just v'; _ -> Nothing) (updated dNode'))
+          uniqDyn v (select fanned NTagReturn)
         NDef n ps b ->
           NDefD <$>
-          uniqDyn n (fmapMaybe (\case; NDef n' _ _ -> Just n'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn ps (fmapMaybe (\case; NDef _ ps' _ -> Just ps'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn b (fmapMaybe (\case; NDef _ _ b' -> Just b'; _ -> Nothing) (updated dNode'))
+          uniqDyn n (fmapCheap (view _1) (select fanned NTagDef)) <*>
+          uniqDyn ps (fmapCheap (view _2) (select fanned NTagDef)) <*>
+          uniqDyn b (fmapCheap (view _3) (select fanned NTagDef))
 
         NBool b ->
           NBoolD <$>
-          uniqDyn b (fmapMaybe (\case; NBool b' -> Just b'; _ -> Nothing) (updated dNode'))
+          uniqDyn b (select fanned NTagBool)
         NInt n ->
           NIntD <$>
-          uniqDyn n (fmapMaybe (\case; NInt n' -> Just n'; _ -> Nothing) (updated dNode'))
+          uniqDyn n (select fanned NTagInt)
         NBinOp op l r ->
           NBinOpD <$>
-          uniqDyn op (fmapMaybe (\case; NBinOp op' _ _ -> Just op'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn l (fmapMaybe (\case; NBinOp _ l' _ -> Just l'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn r (fmapMaybe (\case; NBinOp _ _ r' -> Just r'; _ -> Nothing) (updated dNode'))
+          uniqDyn op (fmapCheap (view _1) (select fanned NTagBinOp)) <*>
+          uniqDyn l (fmapCheap (view _2) (select fanned NTagBinOp)) <*>
+          uniqDyn r (fmapCheap (view _3) (select fanned NTagBinOp))
         NUnOp op v ->
           NUnOpD <$>
-          uniqDyn op (fmapMaybe (\case; NUnOp op' _ -> Just op'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn v (fmapMaybe (\case; NUnOp _ v' -> Just v'; _ -> Nothing) (updated dNode'))
+          uniqDyn op (fmapCheap (view _1) (select fanned NTagUnOp)) <*>
+          uniqDyn v (fmapCheap (view _2) (select fanned NTagUnOp))
         NCall f x ->
           NCallD <$>
-          uniqDyn f (fmapMaybe (\case; NCall f' _ -> Just f'; _ -> Nothing) (updated dNode')) <*>
-          uniqDyn x (fmapMaybe (\case; NCall _ x' -> Just x'; _ -> Nothing) (updated dNode'))
+          uniqDyn f (fmapCheap (view _1) (select fanned NTagCall)) <*>
+          uniqDyn x (fmapCheap (view _2) (select fanned NTagCall))
         NList es ->
           NListD <$>
-          holdDyn es (fmapMaybe (\case; NList es' -> Just es'; _ -> Nothing) (updated dNode'))
+          holdDyn es (select fanned NTagList)
         NEIdent i ->
           NEIdentD <$>
-          uniqDyn i (fmapMaybe (\case; NEIdent i' -> Just i'; _ -> Nothing) (updated dNode'))
+          uniqDyn i (select fanned NTagEIdent)
 
         NBlock bs ->
           NBlockD <$>
-          holdDyn bs (fmapMaybe (\case; NBlock bs' -> Just bs'; _ -> Nothing) (updated dNode'))
+          holdDyn bs (select fanned NTagBlock)
 
         NIdent i ->
           NIdentD <$>
-          uniqDyn i (fmapMaybe (\case; NIdent i' -> Just i'; _ -> Nothing) (updated dNode'))
+          uniqDyn i (select fanned NTagIdent)
 
         NExprs es ->
           NExprsD <$>
-          holdDyn es (fmapMaybe (\case; NExprs es' -> Just es'; _ -> Nothing) (updated dNode'))
+          holdDyn es (select fanned NTagExprs)
         NArgs es ->
           NArgsD <$>
-          holdDyn es (fmapMaybe (\case; NArgs es' -> Just es'; _ -> Nothing) (updated dNode'))
+          holdDyn es (select fanned NTagArgs)
         NParams es ->
           NParamsD <$>
-          holdDyn es (fmapMaybe (\case; NParams es' -> Just es'; _ -> Nothing) (updated dNode'))
+          holdDyn es (select fanned NTagParams)
 
         NSHole -> pure NSHoleD
         NEHole -> pure NEHoleD
@@ -691,10 +928,10 @@ listDyn dList = do
     inner :: Dynamic t [a] -> m [Dynamic t a]
     inner dList' = do
       list <- sample $ current dList'
-      go dList' list
+      go (updated dList') list
 
-    go :: Dynamic t [a] -> [a] -> m [Dynamic t a]
-    go dList' list =
+    go :: Event t [a] -> [a] -> m [Dynamic t a]
+    go eList' list =
       case list of
         [] ->
           pure []
@@ -704,18 +941,18 @@ listDyn dList = do
             x
             (fmapMaybe
                (\case; x' : _ -> Just x'; _ -> Nothing)
-               (updated dList')
+               eList'
             ) <*>
           (do
-             dList'' <-
-               holdDyn
-                 xs
+             let
+               eList'' =
                  (fmapMaybe
                    (\case; _ : xs' -> Just xs'; _ -> Nothing)
-                   (updated dList')
+                   eList'
                  )
-             go dList'' xs
+             go eList'' xs
           )
+
 renderNode ::
   forall t m a b r.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
@@ -729,6 +966,7 @@ renderNode ::
   , MonadReader r m
 
   , DynamicWriter t (RenderNodeInfo t a) m
+  , EventWriter t (NodeEvent a) m
   ) =>
   Dynamic t Bool ->
   Dynamic t Bool ->
@@ -759,8 +997,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
       fmap (\hasError -> if hasError then "class" =: "has-error" else mempty) dHasError <>
       fmap (\inFocus -> if inFocus then "class" =: "syntax-focused" else mempty) dInFocus
   dmNodeFactored <- maybeDyn dmNode
-  (fmap.fmap) fst . dynSyntaxNodeD' dAttrs $
-    dmNodeFactored <&>
+  (fmap.fmap) fst . dynSyntaxNodeD' dAttrs dmNodeFactored $
     \mdNode ->
     errorUnderline dHasError $
       case mdNode of
