@@ -73,7 +73,7 @@ svgUnderline ::
   Int ->
   m ()
 svgUnderline (x, y) width =
-  svgElAttr "svg" (dimensions <> [("style", "position: absolute; left: " <> Text.pack (show x) <> "px; top: " <> Text.pack (show y) <> ";")]) $
+  svgElAttr "svg" (dimensions <> [("style", "position: absolute; left: " <> Text.pack (show x) <> "px; top: " <> Text.pack (show y) <> "px;")]) $
   svgElAttr "rect" (dimensions <> [("fill", "url(#zig)")]) $
   pure ()
   where
@@ -706,8 +706,16 @@ listDyn dList = do
                (\case; x' : _ -> Just x'; _ -> Nothing)
                (updated dList')
             ) <*>
-          (go dList' xs)
-
+          (do
+             dList'' <-
+               holdDyn
+                 xs
+                 (fmapMaybe
+                   (\case; _ : xs' -> Just xs'; _ -> Nothing)
+                   (updated dList')
+                 )
+             go dList'' xs
+          )
 renderNode ::
   forall t m a b r.
   ( MonadHold t m, DomBuilder t m, PostBuild t m

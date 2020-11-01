@@ -89,7 +89,7 @@ documentKeys ::
   m (DocumentKeys t)
 documentKeys = do
   document <- Dom.askDocument
-  let ctrl :: [Text] = ["Tab", "Enter"]
+  let ctrl :: [Text] = ["Tab", "Enter", " "]
   eKeyDown :: Event t Text <-
     Dom.wrapDomEvent document (`EventM.on` Events.keyDown) $ do
       ev <- EventM.event
