@@ -977,25 +977,37 @@ renderNode dInFocus dHasError dHovered dmNode = do
   path <- view rnPath
   let
     dAttrs =
+      (\mNode hovered hasError inFocus ->
+          (if Maybe.maybe False isHole (snd <$> mNode)
+            then "class" =: "syntax-hole"
+            else mempty
+          ) <>
+          (case nodeType @b of
+            TExpr -> "class" =: "syntax-expr"
+            TBlock -> "class" =: "syntax-block"
+            TStatement -> "class" =: "syntax-statement"
+            TIdent -> "class" =: "syntax-ident"
+            TArgs -> "class" =: "syntax-args"
+            TParams -> "class" =: "syntax-params"
+            TExprs -> "class" =: "syntax-exprs"
+          ) <>
+          (if hovered then "class" =: "syntax-hovered" else mempty) <>
+          (if hasError then "class" =: "has-error" else mempty) <>
+          (if inFocus then "class" =: "syntax-focused" else mempty)
+      ) <$>
+      dmNode <*>
+      dHovered <*>
+      dHasError <*>
+      dInFocus
+ {-
       fmap
         (\mNode ->
-            (if Maybe.maybe False isHole (snd <$> mNode)
-             then "class" =: "syntax-hole"
-             else mempty
-            ) <>
-            case nodeType @b of
-              TExpr -> "class" =: "syntax-expr"
-              TBlock -> "class" =: "syntax-block"
-              TStatement -> "class" =: "syntax-statement"
-              TIdent -> "class" =: "syntax-ident"
-              TArgs -> "class" =: "syntax-args"
-              TParams -> "class" =: "syntax-params"
-              TExprs -> "class" =: "syntax-exprs"
         )
         dmNode <>
       fmap (\hovered -> if hovered then "class" =: "syntax-hovered" else mempty) dHovered <>
       fmap (\hasError -> if hasError then "class" =: "has-error" else mempty) dHasError <>
       fmap (\inFocus -> if inFocus then "class" =: "syntax-focused" else mempty) dInFocus
+-}
   dmNodeFactored <- maybeDyn dmNode
   (fmap.fmap) fst . dynSyntaxNodeD' dAttrs dmNodeFactored $
     \mdNode ->

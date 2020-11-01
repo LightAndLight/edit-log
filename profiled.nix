@@ -3,4 +3,4 @@ let
   pkgs = reflex-platform.nixpkgs;
   app = (import ./. { inherit reflex-platform; useWarp = false; }).ghc.edit-log-editor;
 in
-  pkgs.haskell.lib.enableExecutableProfiling app
+  pkgs.haskell.lib.dontHaddock (pkgs.haskell.lib.enableExecutableProfiling app)
