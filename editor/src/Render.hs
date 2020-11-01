@@ -365,6 +365,11 @@ down match build m = do
     , _rnPath = Path.snoc (view rnPath env) build
     }
 
+networkHold_ :: (Adjustable t m, MonadHold t m) => m a -> Event t (m a) -> m ()
+networkHold_ child0 newChild = do
+  (_, _) <- runWithReplace child0 newChild
+  pure ()
+
 errorUnderline ::
   ( MonadHold t m
   , DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
@@ -378,7 +383,7 @@ errorUnderline ::
   m ()
 errorUnderline dHasError m =
   -- Dom.dyn_ $ dHasError <&> drawWhenHasError
-  Dom.widgetHold_
+  networkHold_
     (sample (current dHasError) >>= drawWhenHasError)
     (drawWhenHasError <$> updated dHasError)
   where
@@ -387,7 +392,7 @@ errorUnderline dHasError m =
       then do
         (element, _) <- Dom.elAttr' "span" [("class", "error-target")] m
         eAfterPostBuild <- delay 0.05 =<< getPostBuild
-        Dom.widgetHold_ (drawUnderline element) (drawUnderline element <$ eAfterPostBuild)
+        networkHold_ (drawUnderline element) (drawUnderline element <$ eAfterPostBuild)
       else do
         _ <- m
         pure ()
@@ -885,14 +890,14 @@ nodeDyn dNode = do
         NIHole -> pure NIHoleD
 
 widgetHold_ :: (MonadHold t m, Adjustable t m) => Dynamic t (m a) -> m ()
-widgetHold_ d = Dom.widgetHold_ (join $ sample (current d)) (updated d)
+widgetHold_ d = networkHold_ (join $ sample (current d)) (updated d)
 
 widgetMapHold_ ::
   (MonadHold t m, Adjustable t m) =>
   Dynamic t a ->
   (a -> m b) ->
   m ()
-widgetMapHold_ d f = Dom.widgetHold_ (f =<< sample (current d)) (f <$> updated d)
+widgetMapHold_ d f = networkHold_ (f =<< sample (current d)) (f <$> updated d)
 
 listDyn ::
   forall t m a.
@@ -1028,7 +1033,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
           dNodeD <- nodeDyn (snd <$> dNode)
 
           -- Dom.dyn_ $ nodeDom . snd <$> dNode
-          Dom.widgetHold_
+          networkHold_
             (sample (current dNodeD) >>= nodeDom)
             (nodeDom <$> updated dNodeD)
 
