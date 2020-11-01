@@ -13,7 +13,7 @@ module Main where
 import Data.List.NonEmpty as NonEmpty
 import Control.Lens.Getter ((^.), view)
 import Control.Lens.TH (makeLenses)
-import Control.Monad (join, when)
+import Control.Monad (when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Trans.Class (lift)
@@ -55,7 +55,7 @@ import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..), ren
 import Focus (Focus(..))
 import qualified Navigation
 import Render
-  ( NodeControls(..), NodeEvent(..), RenderNodeEnv(..), RenderNodeInfo(..), FocusedNode(..)
+  ( NodeControls(..), NodeEvent(..), RenderNodeEnv(..), FocusedNode(..)
   , rniNodeEvent, rniFocusElement, rniFocusNode
   , renderNodeHash
   )
@@ -478,22 +478,20 @@ renderEditor keys editorControls initial initialFocus =
           , _rnPath = Nil
           }
 
-        dRenderNodeHash :: Dynamic t (m (Dynamic t (RenderNodeInfo t a)))
-        dRenderNodeHash =
-          (\rootHash -> do
-            ((), dRenderNodeInfo) <-
-              runDynamicWriterT . flip runReaderT renderNodeEnv $
-              renderNodeHash rootHash
-            pure dRenderNodeInfo
-          ) <$>
-          dRootHash
+      dRenderNodeHash' <- do
+        ((), dRenderNodeInfo) <-
+          runDynamicWriterT . flip runReaderT renderNodeEnv $
+          renderNodeHash dRootHash
+        pure dRenderNodeInfo
 
+{-
       dRenderNodeHash' ::
         Dynamic t (RenderNodeInfo t a) <-
         join <$>
         Dom.widgetHold
           (join . sample $ current dRenderNodeHash)
           (updated dRenderNodeHash)
+-}
 
       let
         dFocusNode :: Dynamic t (Maybe (FocusedNode a))

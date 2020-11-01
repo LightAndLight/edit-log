@@ -1,6 +1,6 @@
 {-# language FlexibleContexts #-}
 {-# language FlexibleInstances, FunctionalDependencies, MultiParamTypeClasses #-}
-{-# language GADTs #-}
+{-# language GADTs, KindSignatures #-}
 {-# language LambdaCase #-}
 {-# language OverloadedLists #-}
 {-# language OverloadedStrings #-}
@@ -9,6 +9,7 @@
 {-# language ScopedTypeVariables, TypeApplications #-}
 {-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
+{-# options_ghc -fno-warn-overlapping-patterns #-}
 module Render
   ( NodeControls(..), NodeEvent(..), FocusedNode(..)
   , RenderNodeEnv(..)
@@ -28,6 +29,7 @@ import Control.Lens.Indexed (itraverse_)
 import Control.Lens.Getter ((^.), view, views)
 import Control.Lens.Setter (ASetter, (.~))
 import Control.Lens.TH (makeClassy, makeLenses)
+import Control.Monad (join)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, ask)
 import Data.Foldable (traverse_)
@@ -35,6 +37,8 @@ import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity(..))
 import qualified Data.List as List
+import Data.List.NonEmpty (NonEmpty)
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Maybe as Maybe
 import qualified Data.Text as Text
 import Data.Type.Equality ((:~:)(..))
@@ -42,7 +46,7 @@ import qualified GHCJS.DOM.HTMLElement as HTMLElement
 import GHCJS.DOM.Types (HTMLElement(..))
 import qualified GHCJS.DOM.Types as GHCJS.DOM
 import Language.Javascript.JSaddle.Monad (MonadJSM)
-import Reflex
+import Reflex hiding (list)
 import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace)
 import qualified Reflex.Dom as Dom
 
@@ -54,7 +58,7 @@ import Path (Path(..), Level(..))
 import qualified Path
 import Path.Trie (Trie)
 import qualified Path.Trie as Trie
-import Syntax (BinOp(..), UnOp(..))
+import Syntax (BinOp(..), UnOp(..), Ident, Expr, Block, Statement, Params, Args, Exprs)
 import qualified Store
 import Versioned.Pure (Versioned, runVersionedT)
 
@@ -240,9 +244,10 @@ renderNodeHash ::
 
   , DynamicWriter t (RenderNodeInfo t a) m
   ) =>
-  Hash b ->
+  Dynamic t (Hash b) ->
   m ()
-renderNodeHash h = do
+renderNodeHash dHashRaw = do
+  dHash <- holdUniqDyn dHashRaw
   dHasError <-
     holdUniqDyn =<<
     views rnErrors (fmap $ maybe False (const True) . Trie.current)
@@ -278,12 +283,13 @@ renderNodeHash h = do
     dVersioned <- view rnVersioned
     let
       dmNode =
-        (\versioned ->
+        (\h versioned ->
            let
              Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
            in
               (,) h <$> mNode
         ) <$>
+        dHash <*>
         dVersioned
     (dNodeElement, dRenderNodeInfo) <-
       runDynamicWriterT $
@@ -382,6 +388,326 @@ errorUnderline dHasError m =
       height <- ceiling <$> HTMLElement.getOffsetHeight rawElement
       svgUnderline (x, y + height) width
 
+data NodeD t :: * -> * where
+  NForD ::
+    Dynamic t (Hash Ident) ->
+    Dynamic t (Hash Expr) ->
+    Dynamic t (Hash Block) ->
+    NodeD t Statement
+  NIfThenD ::
+    Dynamic t (Hash Expr) ->
+    Dynamic t (Hash Block) ->
+    NodeD t Statement
+  NIfThenElseD ::
+    Dynamic t (Hash Expr) ->
+    Dynamic t (Hash Block) ->
+    Dynamic t (Hash Block) ->
+    NodeD t Statement
+  NPrintD ::
+    Dynamic t (Hash Expr) ->
+    NodeD t Statement
+  NReturnD ::
+    Dynamic t (Hash Expr) ->
+    NodeD t Statement
+  NDefD ::
+    Dynamic t (Hash Ident) ->
+    Dynamic t (Hash Params) ->
+    Dynamic t (Hash Block) ->
+    NodeD t Statement
+
+  NBoolD ::
+    Dynamic t Bool ->
+    NodeD t Expr
+  NIntD ::
+    Dynamic t Int ->
+    NodeD t Expr
+  NBinOpD ::
+    Dynamic t BinOp ->
+    Dynamic t (Hash Expr) ->
+    Dynamic t (Hash Expr) ->
+    NodeD t Expr
+  NUnOpD ::
+    Dynamic t UnOp ->
+    Dynamic t (Hash Expr) ->
+    NodeD t Expr
+  NCallD ::
+    Dynamic t (Hash Expr) ->
+    Dynamic t (Hash Args) ->
+    NodeD t Expr
+  NListD ::
+    Dynamic t (Hash Exprs) ->
+    NodeD t Expr
+  NEIdentD ::
+    Dynamic t String ->
+    NodeD t Expr
+
+  NBlockD ::
+    Dynamic t (NonEmpty (Hash Statement)) ->
+    NodeD t Block
+
+  NIdentD ::
+    Dynamic t String ->
+    NodeD t Ident
+
+  NExprsD ::
+    Dynamic t [Hash Expr] ->
+    NodeD t Exprs
+  NArgsD ::
+    Dynamic t [Hash Expr] ->
+    NodeD t Args
+  NParamsD ::
+    Dynamic t [Hash Ident] ->
+    NodeD t Params
+
+  NSHoleD :: NodeD t Statement
+  NEHoleD :: NodeD t Expr
+  NIHoleD :: NodeD t Ident
+
+uniqDyn :: (Reflex t, MonadHold t m, Eq a, MonadFix m) => a -> Event t a -> m (Dynamic t a)
+uniqDyn initial eUpdate = holdUniqDyn =<< holdDyn initial eUpdate
+
+nodeDyn ::
+  forall t m a.
+  (Reflex t, MonadHold t m, MonadFix m, Adjustable t m) =>
+  Dynamic t (Node a) ->
+  m (Dynamic t (NodeD t a))
+nodeDyn dNode = do
+  rec
+    dNodeD <-
+      Dom.widgetHold
+        (inner dNode)
+        (attachWithMaybe
+          (\now next ->
+             case now of
+               NForD{} ->
+                 case next of
+                   NFor{} -> Nothing
+                   _ -> Just $ inner dNode
+               NIfThenD{} ->
+                 case next of
+                   NIfThen{} -> Nothing
+                   _ -> Just $ inner dNode
+               NIfThenElseD{} ->
+                 case next of
+                   NIfThenElse{} -> Nothing
+                   _ -> Just $ inner dNode
+               NPrintD{} ->
+                 case next of
+                   NPrint{} -> Nothing
+                   _ -> Just $ inner dNode
+               NReturnD{} ->
+                 case next of
+                   NReturn{} -> Nothing
+                   _ -> Just $ inner dNode
+               NDefD{} ->
+                 case next of
+                   NDef{} -> Nothing
+                   _ -> Just $ inner dNode
+               NBoolD{} ->
+                 case next of
+                   NBool{} -> Nothing
+                   _ -> Just $ inner dNode
+               NIntD{} ->
+                 case next of
+                   NInt{} -> Nothing
+                   _ -> Just $ inner dNode
+               NBinOpD{} ->
+                 case next of
+                   NBinOp{} -> Nothing
+                   _ -> Just $ inner dNode
+               NUnOpD{} ->
+                 case next of
+                   NUnOp{} -> Nothing
+                   _ -> Just $ inner dNode
+               NCallD{} ->
+                 case next of
+                   NCall{} -> Nothing
+                   _ -> Just $ inner dNode
+               NListD{} ->
+                 case next of
+                   NList{} -> Nothing
+                   _ -> Just $ inner dNode
+               NEIdentD{} ->
+                 case next of
+                   NEIdent{} -> Nothing
+                   _ -> Just $ inner dNode
+               NBlockD{} ->
+                 case next of
+                   NBlock{} -> Nothing
+                   _ -> Just $ inner dNode
+               NIdentD{} ->
+                 case next of
+                   NIdent{} -> Nothing
+                   _ -> Just $ inner dNode
+               NExprsD{} ->
+                 case next of
+                   NExprs{} -> Nothing
+                   _ -> Just $ inner dNode
+               NArgsD{} ->
+                 case next of
+                   NArgs{} -> Nothing
+                   _ -> Just $ inner dNode
+               NParamsD{} ->
+                 case next of
+                   NParams{} -> Nothing
+                   _ -> Just $ inner dNode
+               NSHoleD{} ->
+                 case next of
+                   NSHole{} -> Nothing
+                   _ -> Just $ inner dNode
+               NEHoleD{} ->
+                 case next of
+                   NEHole{} -> Nothing
+                   _ -> Just $ inner dNode
+               NIHoleD{} ->
+                 case next of
+                   NIHole{} -> Nothing
+                   _ -> Just $ inner dNode
+          )
+          (current dNodeD)
+          (updated dNode)
+        )
+  pure dNodeD
+  where
+    inner :: Dynamic t (Node a) -> m (NodeD t a)
+    inner dNode' = do
+      node <- sample $ current dNode'
+      case node of
+        NFor i e b ->
+          NForD <$>
+          uniqDyn i (fmapMaybe (\case; NFor i' _ _ -> Just i'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn e (fmapMaybe (\case; NFor _ e' _ -> Just e'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn b (fmapMaybe (\case; NFor _ _ b' -> Just b'; _ -> Nothing) (updated dNode'))
+        NIfThen c t ->
+          NIfThenD <$>
+          uniqDyn c (fmapMaybe (\case; NIfThen c' _ -> Just c'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn t (fmapMaybe (\case; NIfThen _ t' -> Just t'; _ -> Nothing) (updated dNode'))
+        NIfThenElse c t e ->
+          NIfThenElseD <$>
+          uniqDyn c (fmapMaybe (\case; NIfThenElse c' _ _ -> Just c'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn t (fmapMaybe (\case; NIfThenElse _ t' _ -> Just t'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn e (fmapMaybe (\case; NIfThenElse _ _ e' -> Just e'; _ -> Nothing) (updated dNode'))
+        NPrint v ->
+          NPrintD <$>
+          uniqDyn v (fmapMaybe (\case; NPrint v' -> Just v'; _ -> Nothing) (updated dNode'))
+        NReturn v ->
+          NReturnD <$>
+          uniqDyn v (fmapMaybe (\case; NReturn v' -> Just v'; _ -> Nothing) (updated dNode'))
+        NDef n ps b ->
+          NDefD <$>
+          uniqDyn n (fmapMaybe (\case; NDef n' _ _ -> Just n'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn ps (fmapMaybe (\case; NDef _ ps' _ -> Just ps'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn b (fmapMaybe (\case; NDef _ _ b' -> Just b'; _ -> Nothing) (updated dNode'))
+
+        NBool b ->
+          NBoolD <$>
+          uniqDyn b (fmapMaybe (\case; NBool b' -> Just b'; _ -> Nothing) (updated dNode'))
+        NInt n ->
+          NIntD <$>
+          uniqDyn n (fmapMaybe (\case; NInt n' -> Just n'; _ -> Nothing) (updated dNode'))
+        NBinOp op l r ->
+          NBinOpD <$>
+          uniqDyn op (fmapMaybe (\case; NBinOp op' _ _ -> Just op'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn l (fmapMaybe (\case; NBinOp _ l' _ -> Just l'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn r (fmapMaybe (\case; NBinOp _ _ r' -> Just r'; _ -> Nothing) (updated dNode'))
+        NUnOp op v ->
+          NUnOpD <$>
+          uniqDyn op (fmapMaybe (\case; NUnOp op' _ -> Just op'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn v (fmapMaybe (\case; NUnOp _ v' -> Just v'; _ -> Nothing) (updated dNode'))
+        NCall f x ->
+          NCallD <$>
+          uniqDyn f (fmapMaybe (\case; NCall f' _ -> Just f'; _ -> Nothing) (updated dNode')) <*>
+          uniqDyn x (fmapMaybe (\case; NCall _ x' -> Just x'; _ -> Nothing) (updated dNode'))
+        NList es ->
+          NListD <$>
+          holdDyn es (fmapMaybe (\case; NList es' -> Just es'; _ -> Nothing) (updated dNode'))
+        NEIdent i ->
+          NEIdentD <$>
+          uniqDyn i (fmapMaybe (\case; NEIdent i' -> Just i'; _ -> Nothing) (updated dNode'))
+
+        NBlock bs ->
+          NBlockD <$>
+          holdDyn bs (fmapMaybe (\case; NBlock bs' -> Just bs'; _ -> Nothing) (updated dNode'))
+
+        NIdent i ->
+          NIdentD <$>
+          uniqDyn i (fmapMaybe (\case; NIdent i' -> Just i'; _ -> Nothing) (updated dNode'))
+
+        NExprs es ->
+          NExprsD <$>
+          holdDyn es (fmapMaybe (\case; NExprs es' -> Just es'; _ -> Nothing) (updated dNode'))
+        NArgs es ->
+          NArgsD <$>
+          holdDyn es (fmapMaybe (\case; NArgs es' -> Just es'; _ -> Nothing) (updated dNode'))
+        NParams es ->
+          NParamsD <$>
+          holdDyn es (fmapMaybe (\case; NParams es' -> Just es'; _ -> Nothing) (updated dNode'))
+
+        NSHole -> pure NSHoleD
+        NEHole -> pure NEHoleD
+        NIHole -> pure NIHoleD
+
+widgetHold_ :: (MonadHold t m, Adjustable t m) => Dynamic t (m a) -> m ()
+widgetHold_ d = Dom.widgetHold_ (join $ sample (current d)) (updated d)
+
+widgetMapHold_ ::
+  (MonadHold t m, Adjustable t m) =>
+  Dynamic t a ->
+  (a -> m b) ->
+  m ()
+widgetMapHold_ d f = Dom.widgetHold_ (f =<< sample (current d)) (f <$> updated d)
+
+listDyn ::
+  forall t m a.
+  (Adjustable t m, MonadHold t m, MonadFix m) =>
+  Dynamic t [a] ->
+  m (Dynamic t ([Dynamic t a]))
+listDyn dList = do
+  rec
+    dListD <-
+      Dom.widgetHold
+        (inner dList)
+        (attachWithMaybe
+          (\now next ->
+             case now of
+               [] ->
+                 case next of
+                   [] ->
+                     Nothing
+                   _ ->
+                     Just $ inner dList
+               _:_ ->
+                 case next of
+                   _:_ ->
+                     Nothing
+                   _ ->
+                     Just $ inner dList
+          )
+          (current dListD)
+          (updated dList)
+        )
+  pure dListD
+  where
+    inner :: Dynamic t [a] -> m [Dynamic t a]
+    inner dList' = do
+      list <- sample $ current dList'
+      go dList' list
+
+    go :: Dynamic t [a] -> [a] -> m [Dynamic t a]
+    go dList' list =
+      case list of
+        [] ->
+          pure []
+        x : xs ->
+          (:) <$>
+          holdDyn
+            x
+            (fmapMaybe
+               (\case; x' : _ -> Just x'; _ -> Nothing)
+               (updated dList')
+            ) <*>
+          (go dList' xs)
+
 renderNode ::
   forall t m a b r.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
@@ -442,22 +768,24 @@ renderNode dInFocus dHasError dHovered dmNode = do
             dInFocus <*>
             dNode
 
+          dNodeD <- nodeDyn (snd <$> dNode)
+
           -- Dom.dyn_ $ nodeDom . snd <$> dNode
           Dom.widgetHold_
-            (sample (current dNode) >>= nodeDom . snd)
-            (nodeDom . snd <$> updated dNode)
+            (sample (current dNodeD) >>= nodeDom)
+            (nodeDom <$> updated dNodeD)
 
   where
-    nodeDom :: Node b -> m ()
+    nodeDom :: NodeD t b -> m ()
     nodeDom node =
       case node of
-        NEIdent n ->
-          Dom.text (Text.pack n)
-        NIdent n ->
-          Dom.text (Text.pack n)
-        NIHole ->
+        NEIdentD n ->
+          Dom.dyn_ $ Dom.text . Text.pack <$> n
+        NIdentD n ->
+          Dom.dyn_ $ Dom.text . Text.pack <$> n
+        NIHoleD ->
           syntaxHole mempty
-        NFor ident val body -> do
+        NForD ident val body -> do
           syntaxLine mempty $ do
             syntaxKeyword mempty $ Dom.text "for"
             down
@@ -475,7 +803,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
               (\case; For_Block -> Just (Refl, Refl); _ -> Nothing)
               For_Block
               (renderNodeHash body)
-        NIfThen cond then_ -> do
+        NIfThenD cond then_ -> do
           syntaxLine mempty $ do
             syntaxKeyword mempty $ Dom.text "if"
             down
@@ -488,7 +816,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
               (\case; IfThen_Then -> Just (Refl, Refl); _ -> Nothing)
               IfThen_Then
               (renderNodeHash then_)
-        NIfThenElse cond then_ else_ -> do
+        NIfThenElseD cond then_ else_ -> do
           syntaxLine mempty $ do
             syntaxKeyword mempty $ Dom.text "if"
             down
@@ -509,7 +837,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
               (\case; IfThenElse_Else -> Just (Refl, Refl); _ -> Nothing)
               IfThenElse_Else
               (renderNodeHash else_)
-        NPrint val ->
+        NPrintD val ->
           syntaxLine mempty $ do
             syntaxKeyword mempty $ Dom.text "print"
             syntaxColon mempty
@@ -517,7 +845,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
               (\case; Print_Value -> Just (Refl, Refl); _ -> Nothing)
               Print_Value
               (renderNodeHash val)
-        NReturn val ->
+        NReturnD val ->
           syntaxLine mempty $ do
             syntaxKeyword mempty $ Dom.text "return"
             syntaxColon mempty
@@ -525,7 +853,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
               (\case; Return_Value -> Just (Refl, Refl); _ -> Nothing)
               Return_Value
               (renderNodeHash val)
-        NDef name args body -> do
+        NDefD name args body -> do
           syntaxLine mempty $ do
             syntaxKeyword mempty $ Dom.text "def"
             down
@@ -544,40 +872,48 @@ renderNode dInFocus dHasError dHovered dmNode = do
               (\case; Def_Body -> Just (Refl, Refl); _ -> Nothing)
               Def_Body
               (renderNodeHash body)
-        NBool b ->
-          syntaxLiteral mempty . Dom.text $
-          if b then "true" else "false"
-        NInt n ->
-          syntaxLiteral mempty . Dom.text $
-          Text.pack (show n)
-        NBinOp op left right ->
+        NBoolD dB ->
+          widgetHold_ $
+          syntaxLiteral mempty . Dom.text .
+          (\b -> if b then "true" else "false") <$> dB
+        NIntD n ->
+          widgetHold_ $
+          syntaxLiteral mempty . Dom.text .
+          Text.pack . show <$> n
+        NBinOpD dOp left right ->
           syntaxInline mempty $ do
             down
               (\case; BinOp_Left -> Just (Refl, Refl); _ -> Nothing)
               BinOp_Left
               (renderNodeHash left)
-            case op of
-              Add -> syntaxSymbol mempty $ Dom.text "+"
-              Sub -> syntaxSymbol mempty $ Dom.text "-"
-              Mul -> syntaxSymbol mempty $ Dom.text "*"
-              Div -> syntaxSymbol mempty $ Dom.text "/"
-              Eq -> syntaxSymbol mempty $ Dom.text "=="
-              And -> syntaxKeyword mempty $ Dom.text "and"
-              Or -> syntaxKeyword mempty $ Dom.text "or"
+            widgetHold_ $
+              (\case
+                Add -> syntaxSymbol mempty $ Dom.text "+"
+                Sub -> syntaxSymbol mempty $ Dom.text "-"
+                Mul -> syntaxSymbol mempty $ Dom.text "*"
+                Div -> syntaxSymbol mempty $ Dom.text "/"
+                Eq -> syntaxSymbol mempty $ Dom.text "=="
+                And -> syntaxKeyword mempty $ Dom.text "and"
+                Or -> syntaxKeyword mempty $ Dom.text "or"
+              ) <$>
+              dOp
             down
               (\case; BinOp_Right -> Just (Refl, Refl); _ -> Nothing)
               BinOp_Right
               (renderNodeHash right)
-        NUnOp op val ->
+        NUnOpD dOp val ->
           syntaxInline mempty $ do
-            case op of
-              Neg -> syntaxSymbol mempty $ Dom.text "-"
-              Not -> syntaxKeyword mempty $ Dom.text "not"
+            widgetHold_ $
+              (\case
+                Neg -> syntaxSymbol mempty $ Dom.text "-"
+                Not -> syntaxKeyword mempty $ Dom.text "not"
+              ) <$>
+              dOp
             down
               (\case; UnOp_Value -> Just (Refl, Refl); _ -> Nothing)
               UnOp_Value
               (renderNodeHash val)
-        NCall func args ->
+        NCallD func args ->
           syntaxInline mempty $ do
             down
               (\case; Call_Function -> Just (Refl, Refl); _ -> Nothing)
@@ -589,7 +925,7 @@ renderNode dInFocus dHasError dHovered dmNode = do
               Call_Args
               (renderNodeHash args)
             syntaxRParen mempty
-        NList exprs -> do
+        NListD exprs -> do
           syntaxInline mempty $ do
             syntaxLBracket mempty
             down
@@ -597,58 +933,60 @@ renderNode dInFocus dHasError dHovered dmNode = do
               List_Exprs
               (renderNodeHash exprs)
             syntaxRBracket mempty
-        NExprs xs ->
-          syntaxInline mempty $
-          traverse_
-            (\item ->
-              case item of
-                Nothing ->
-                  syntaxComma mempty
-                Just (ix, x) ->
-                  down
-                    (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                    (Exprs_Index ix)
-                    (renderNodeHash x)
-            )
-            (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
-        NBlock sts -> do
-          itraverse_
-            (\ix st ->
-              down
-                (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                (Block_Index ix)
-                (renderNodeHash st)
-            )
-            sts
-        NArgs xs -> do
+        NExprsD xs ->
           syntaxInline mempty $ do
-            traverse_
-              (\item ->
-                case item of
-                  Nothing ->
-                    syntaxComma mempty
-                  Just (ix, x) ->
-                    down
-                      (\case; Args_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                      (Args_Index ix)
-                      (renderNodeHash x)
+            dldX <- listDyn xs
+            widgetMapHold_ dldX
+              (itraverse_ $
+               \ix x ->
+                 down
+                   (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                   (Exprs_Index ix)
+                   (renderNodeHash x)
               )
-              (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
-        NParams xs -> do
+        NBlockD sts -> do
+          dldSt <- listDyn $ NonEmpty.toList <$> sts
+          widgetMapHold_ dldSt
+            (itraverse_ $
+              \ix x ->
+                down
+                  (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                  (Block_Index ix)
+                  (renderNodeHash x)
+            )
+        NArgsD xs -> do
           syntaxInline mempty $ do
-            traverse_
-              (\item ->
-                case item of
-                  Nothing ->
-                    syntaxComma mempty
-                  Just (ix, x) ->
-                    down
-                      (\case; Params_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                      (Params_Index ix)
-                      (renderNodeHash x)
-              )
-              (List.intersperse Nothing $ Just <$> zip [0::Int ..] xs)
-        NSHole ->
+            dldX <- listDyn xs
+            widgetMapHold_ dldX $
+              traverse_
+                (\item ->
+                  case item of
+                    Nothing ->
+                      syntaxComma mempty
+                    Just (ix, x) ->
+                      down
+                        (\case; Args_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                        (Args_Index ix)
+                        (renderNodeHash x)
+                ) .
+                List.intersperse Nothing . fmap Just . zip [0::Int ..]
+        NParamsD xs -> do
+          syntaxInline mempty $ do
+            dldX <- listDyn xs
+            widgetMapHold_ dldX $
+              traverse_
+                (\item ->
+                  case item of
+                    Nothing ->
+                      syntaxComma mempty
+                    Just (ix, x) ->
+                      down
+                        (\case; Params_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                        (Params_Index ix)
+                        (renderNodeHash x)
+                ) .
+                List.intersperse Nothing . fmap Just . zip [0::Int ..]
+        NSHoleD ->
           syntaxHole mempty
-        NEHole ->
+        NEHoleD ->
           syntaxHole mempty
