@@ -15,7 +15,9 @@ library
                      , BottomPanel
                      , ContextMenu
                      , Focus
+                     , List.Dynamic
                      , Navigation
+                     , Node.Dynamic
                      , Render
                      , Svg
                      , Main
