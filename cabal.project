@@ -1,4 +1,4 @@
 packages:
   ./core
   ./editor
-  ./renderdiff
+  ./experiments/renderdiff
