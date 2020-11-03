@@ -260,87 +260,18 @@ renderNodeHash ::
   Dynamic t (Hash b) ->
   m ()
 renderNodeHash dHash = do
-  dHasError <-
-    holdUniqDyn =<<
-    views rnErrors (fmap $ maybe False (const True) . Trie.current)
-
-  dInFocus <-
-    holdUniqDyn =<<
-    views rnFocus (fmap (\case; Focus Nil -> True; _ -> False))
-
-  rec
-    let
-      eMouseenter = switchDyn $ Dom.domEvent Dom.Mouseenter <$> dNodeElement
-      eMouseleave = switchDyn $ Dom.domEvent Dom.Mouseleave <$> dNodeElement
-      eMousedown = switchDyn $ Dom.domEvent Dom.Mousedown <$> dNodeElement
-
-
-    dMouseInside <-
-      case nodeType @b of
-        TBlock ->
-          pure $ view rniHovered <$> dRenderNodeInfo
-        _ ->
-          holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
-    dHovered <-
-      case nodeType @b of
-        TBlock -> pure $ constDyn False
-        _ ->
-          holdUniqDyn $
-          (\inFocus inside childInfo ->
-             inside && not (childInfo ^. rniHovered) && not inFocus
-          ) <$>
-          dInFocus <*>
-          dMouseInside <*>
-          dRenderNodeInfo
-
-    let eClicked = gate (current dHovered) eMousedown
-
-    dVersioned <- view rnVersioned
-    let
-      dmNode =
-        (\h versioned ->
-           let
-             Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
-           in
-              (,) h <$> mNode
-        ) <$>
-        dHash <*>
-        dVersioned
-    (dNodeElement, dRenderNodeInfo) <-
-      runDynamicWriterT $
-      renderNode dInFocus dHasError dHovered dmNode
-
-  dMenu <- view rnMenu
-  controls <- view rnNodeControls
-  path <- view rnPath
+  dVersioned <- view rnVersioned
   let
-    eOpenMenu =
-      attachWithMaybe
-        (\(inFocus, menu) () -> if inFocus && menu == MenuClosed then Just OpenMenu else Nothing)
-        ((,) <$> current dInFocus <*> current dMenu)
-        (ncOpenMenu controls)
-
-    eCloseMenu =
-      attachWithMaybe
-        (\menu () -> if menu == MenuOpen then Just CloseMenu else Nothing)
-        (current dMenu)
-        (ncCloseMenu controls)
-
-    eSelect =
-      Select path <$ eClicked
-
-  tellDyn dRenderNodeInfo
-
-  tellEvent eOpenMenu
-  tellEvent eCloseMenu
-  tellEvent eSelect
-
-  -- why do I get an overlapping instance error without the type applications?
-  scribeDyn @t @(RenderNodeInfo t a) rniHovered dMouseInside
-  scribeDyn @t @(RenderNodeInfo t a) rniFocusElement $
-    (\nodeElement inFocus -> if inFocus then Just nodeElement else Nothing) <$>
-    dNodeElement <*>
-    dInFocus
+    dmNode =
+      (\h versioned ->
+          let
+            Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
+          in
+            (,) h <$> mNode
+      ) <$>
+      dHash <*>
+      dVersioned
+  renderMaybeNode dmNode
 
 down ::
   ( Monad m
@@ -403,7 +334,7 @@ errorUnderline dHasError m =
       height <- ceiling <$> HTMLElement.getOffsetHeight rawElement
       svgUnderline (x, y + height) width
 
-renderNode ::
+renderMaybeNode ::
   forall t m a b r.
   ( MonadHold t m, DomBuilder t m, PostBuild t m
   , PerformEvent t m, MonadJSM (Performable m)
@@ -418,271 +349,353 @@ renderNode ::
   , DynamicWriter t (RenderNodeInfo t a) m
   , EventWriter t (NodeEvent a) m
   ) =>
-  Dynamic t Bool ->
-  Dynamic t Bool ->
-  Dynamic t Bool ->
   Dynamic t (Maybe (Hash b, Node b)) ->
-  m (Dynamic t (Dom.Element Dom.EventResult GhcjsDomSpace t))
-renderNode dInFocus dHasError dHovered dmNode = do
-  path <- view rnPath
-  let
-    dAttrs =
-      (\mNode hovered hasError inFocus ->
-          (if Maybe.maybe False isHole (snd <$> mNode)
-            then "class" =: "syntax-hole"
-            else mempty
-          ) <>
-          (case nodeType @b of
-            TExpr -> "class" =: "syntax-expr"
-            TBlock -> "class" =: "syntax-block"
-            TStatement -> "class" =: "syntax-statement"
-            TIdent -> "class" =: "syntax-ident"
-            TArgs -> "class" =: "syntax-args"
-            TParams -> "class" =: "syntax-params"
-            TExprs -> "class" =: "syntax-exprs"
-          ) <>
-          (if hovered then "class" =: "syntax-hovered" else mempty) <>
-          (if hasError then "class" =: "has-error" else mempty) <>
-          (if inFocus then "class" =: "syntax-focused" else mempty)
-      ) <$>
-      dmNode <*>
-      dHovered <*>
-      dHasError <*>
-      dInFocus
+  m ()
+renderMaybeNode dmNode = do
+  dHasError <-
+    holdUniqDyn =<<
+    views rnErrors (fmap $ maybe False (const True) . Trie.current)
 
-  dmNodeFactored <- maybeDyn dmNode
-  forDyn dmNodeFactored $
-    \mdNode ->
-    fmap fst . syntaxNodeD' dAttrs . errorUnderline dHasError $
-      case mdNode of
-        Nothing ->
-          Dom.text "error: missing node"
-        Just dNode -> do
-          scribeDyn @t @(RenderNodeInfo t a) rniFocusNode $
-            (\inFocus (hash, node) ->
-              if inFocus
-              then Just $ FocusedNode path hash node
-              else Nothing
-            ) <$>
-            dInFocus <*>
-            dNode
+  dInFocus <-
+    holdUniqDyn =<<
+    views rnFocus (fmap (\case; Focus Nil -> True; _ -> False))
 
-          dNodeD <- nodeDyn (snd <$> dNode)
+  rec
+    let
+      dAttrs =
+        (\mNode hovered hasError inFocus ->
+            (if Maybe.maybe False isHole (snd <$> mNode)
+              then "class" =: "syntax-hole"
+              else mempty
+            ) <>
+            (case nodeType @b of
+              TExpr -> "class" =: "syntax-expr"
+              TBlock -> "class" =: "syntax-block"
+              TStatement -> "class" =: "syntax-statement"
+              TIdent -> "class" =: "syntax-ident"
+              TArgs -> "class" =: "syntax-args"
+              TParams -> "class" =: "syntax-params"
+              TExprs -> "class" =: "syntax-exprs"
+            ) <>
+            (if hovered then "class" =: "syntax-hovered" else mempty) <>
+            (if hasError then "class" =: "has-error" else mempty) <>
+            (if inFocus then "class" =: "syntax-focused" else mempty)
+        ) <$>
+        dmNode <*>
+        dElementHovered <*>
+        dHasError <*>
+        dInFocus
 
-          forDyn_ dNodeD nodeDom
+    dmNodeFactored <- maybeDyn dmNode
+    (dElementHovered :: Dynamic t Bool, _dElement) <-
+      fmap (\d -> (d >>= fst, snd <$> d)) . forDyn dmNodeFactored $
+      \mdNode -> do
+        (element, dRenderNodeInfo) <-
+          runDynamicWriterT . fmap fst . syntaxNodeD' dAttrs . errorUnderline dHasError $
+          case mdNode of
+            Nothing ->
+              Dom.text "error: missing node"
+            Just dNode -> do
+              path <- view rnPath
+              scribeDyn @t @(RenderNodeInfo t a) rniFocusNode $
+                (\inFocus (hash, node) ->
+                  if inFocus
+                  then Just $ FocusedNode path hash node
+                  else Nothing
+                ) <$>
+                dInFocus <*>
+                dNode
 
-  where
-    nodeDom :: NodeD t b -> m ()
-    nodeDom node =
-      case node of
-        NEIdentD n ->
-          Dom.dyn_ $ Dom.text . Text.pack <$> n
-        NIdentD n ->
-          Dom.dyn_ $ Dom.text . Text.pack <$> n
-        NIHoleD ->
-          syntaxHole mempty
-        NForD ident val body -> do
-          syntaxLine mempty $ do
-            syntaxKeyword mempty $ Dom.text "for"
-            down
-              (\case; For_Ident -> Just (Refl, Refl); _ -> Nothing)
-              For_Ident
-              (renderNodeHash ident)
-            syntaxKeyword mempty $ Dom.text "in"
-            down
-              (\case; For_Expr -> Just (Refl, Refl); _ -> Nothing)
-              For_Expr
-              (renderNodeHash val)
-            syntaxColon mempty
-          syntaxNested mempty $
-            down
-              (\case; For_Block -> Just (Refl, Refl); _ -> Nothing)
-              For_Block
-              (renderNodeHash body)
-        NIfThenD cond then_ -> do
-          syntaxLine mempty $ do
-            syntaxKeyword mempty $ Dom.text "if"
-            down
-              (\case; IfThen_Cond -> Just (Refl, Refl); _ -> Nothing)
-              IfThen_Cond
-              (renderNodeHash cond)
-            syntaxColon mempty
-          syntaxNested mempty $
-            down
-              (\case; IfThen_Then -> Just (Refl, Refl); _ -> Nothing)
-              IfThen_Then
-              (renderNodeHash then_)
-        NIfThenElseD cond then_ else_ -> do
-          syntaxLine mempty $ do
-            syntaxKeyword mempty $ Dom.text "if"
-            down
-              (\case; IfThenElse_Cond -> Just (Refl, Refl); _ -> Nothing)
-              IfThenElse_Cond
-              (renderNodeHash cond)
-            syntaxColon mempty
-          syntaxNested mempty $
-            down
-              (\case; IfThenElse_Then -> Just (Refl, Refl); _ -> Nothing)
-              IfThenElse_Then
-              (renderNodeHash then_)
-          syntaxLine mempty $ do
-            syntaxKeyword mempty $ Dom.text "else"
-            syntaxColon mempty
-          syntaxNested mempty $
-            down
-              (\case; IfThenElse_Else -> Just (Refl, Refl); _ -> Nothing)
-              IfThenElse_Else
-              (renderNodeHash else_)
-        NPrintD val ->
-          syntaxLine mempty $ do
-            syntaxKeyword mempty $ Dom.text "print"
-            syntaxColon mempty
-            down
-              (\case; Print_Value -> Just (Refl, Refl); _ -> Nothing)
-              Print_Value
-              (renderNodeHash val)
-        NReturnD val ->
-          syntaxLine mempty $ do
-            syntaxKeyword mempty $ Dom.text "return"
-            syntaxColon mempty
-            down
-              (\case; Return_Value -> Just (Refl, Refl); _ -> Nothing)
-              Return_Value
-              (renderNodeHash val)
-        NDefD name args body -> do
-          syntaxLine mempty $ do
-            syntaxKeyword mempty $ Dom.text "def"
-            down
-              (\case; Def_Name -> Just (Refl, Refl); _ -> Nothing)
-              Def_Name
-              (renderNodeHash name)
-            syntaxLParen mempty
-            down
-              (\case; Def_Args -> Just (Refl, Refl); _ -> Nothing)
-              Def_Args
-              (renderNodeHash args)
-            syntaxRParen mempty
-            syntaxColon mempty
-          syntaxNested mempty $
-            down
-              (\case; Def_Body -> Just (Refl, Refl); _ -> Nothing)
-              Def_Body
-              (renderNodeHash body)
-        NBoolD dB ->
-          sequenceDyn_ $
-          syntaxLiteral mempty . Dom.text .
-          (\b -> if b then "true" else "false") <$> dB
-        NIntD n ->
-          sequenceDyn_ $
-          syntaxLiteral mempty . Dom.text .
-          Text.pack . show <$> n
-        NBinOpD dOp left right ->
-          syntaxInline mempty $ do
-            down
-              (\case; BinOp_Left -> Just (Refl, Refl); _ -> Nothing)
-              BinOp_Left
-              (renderNodeHash left)
-            sequenceDyn_ $
-              (\case
-                Add -> syntaxSymbol mempty $ Dom.text "+"
-                Sub -> syntaxSymbol mempty $ Dom.text "-"
-                Mul -> syntaxSymbol mempty $ Dom.text "*"
-                Div -> syntaxSymbol mempty $ Dom.text "/"
-                Eq -> syntaxSymbol mempty $ Dom.text "=="
-                And -> syntaxKeyword mempty $ Dom.text "and"
-                Or -> syntaxKeyword mempty $ Dom.text "or"
+              dNodeD <- nodeDyn (snd <$> dNode)
+
+              forDyn_ dNodeD renderNodeD
+        let
+          eMouseenter = Dom.domEvent Dom.Mouseenter element
+          eMouseleave = Dom.domEvent Dom.Mouseleave element
+          eMousedown = Dom.domEvent Dom.Mousedown element
+
+        dMouseInside <-
+          case nodeType @b of
+            TBlock ->
+              pure $ view rniHovered <$> dRenderNodeInfo
+            _ ->
+              holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
+
+        dHovered <-
+          case nodeType @b of
+            TBlock -> pure $ constDyn False
+            _ ->
+              holdUniqDyn $
+              (\inFocus inside childInfo ->
+                inside && not (childInfo ^. rniHovered) && not inFocus
               ) <$>
-              dOp
+              dInFocus <*>
+              dMouseInside <*>
+              dRenderNodeInfo
+
+        let eClicked = gate (current dHovered) eMousedown
+
+        dMenu <- view rnMenu
+        controls <- view rnNodeControls
+        path <- view rnPath
+        let
+          eOpenMenu =
+            attachWithMaybe
+              (\(inFocus, menu) () -> if inFocus && menu == MenuClosed then Just OpenMenu else Nothing)
+              ((,) <$> current dInFocus <*> current dMenu)
+              (ncOpenMenu controls)
+
+          eCloseMenu =
+            attachWithMaybe
+              (\menu () -> if menu == MenuOpen then Just CloseMenu else Nothing)
+              (current dMenu)
+              (ncCloseMenu controls)
+
+          eSelect =
+            Select path <$ eClicked
+
+        tellDyn dRenderNodeInfo
+
+        -- why do I get an overlapping instance error without the type applications?
+        scribeDyn @t @(RenderNodeInfo t a) rniHovered dMouseInside
+        scribeDyn @t @(RenderNodeInfo t a) rniFocusElement $
+          (\inFocus -> if inFocus then Just element else Nothing) <$>
+          dInFocus
+
+        tellEvent eOpenMenu
+        tellEvent eCloseMenu
+        tellEvent eSelect
+
+        pure (dHovered, element)
+  pure ()
+
+renderNodeD ::
+  ( DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
+  , MonadHold t m
+  , PerformEvent t m, MonadJSM (Performable m)
+  , TriggerEvent t m
+  , Adjustable t m
+  , NotReady t m
+  , PostBuild t m
+  , HasRenderNodeEnv r t a b
+  , MonadReader r m
+  , MonadFix m
+  , MonadJSM m
+  , DynamicWriter t (RenderNodeInfo t a) m
+  , EventWriter t (NodeEvent a) m
+  ) =>
+  NodeD t b ->
+  m ()
+renderNodeD node =
+  case node of
+    NEIdentD n ->
+      Dom.dyn_ $ Dom.text . Text.pack <$> n
+    NIdentD n ->
+      Dom.dyn_ $ Dom.text . Text.pack <$> n
+    NIHoleD ->
+      syntaxHole mempty
+    NForD ident val body -> do
+      syntaxLine mempty $ do
+        syntaxKeyword mempty $ Dom.text "for"
+        down
+          (\case; For_Ident -> Just (Refl, Refl); _ -> Nothing)
+          For_Ident
+          (renderNodeHash ident)
+        syntaxKeyword mempty $ Dom.text "in"
+        down
+          (\case; For_Expr -> Just (Refl, Refl); _ -> Nothing)
+          For_Expr
+          (renderNodeHash val)
+        syntaxColon mempty
+      syntaxNested mempty $
+        down
+          (\case; For_Block -> Just (Refl, Refl); _ -> Nothing)
+          For_Block
+          (renderNodeHash body)
+    NIfThenD cond then_ -> do
+      syntaxLine mempty $ do
+        syntaxKeyword mempty $ Dom.text "if"
+        down
+          (\case; IfThen_Cond -> Just (Refl, Refl); _ -> Nothing)
+          IfThen_Cond
+          (renderNodeHash cond)
+        syntaxColon mempty
+      syntaxNested mempty $
+        down
+          (\case; IfThen_Then -> Just (Refl, Refl); _ -> Nothing)
+          IfThen_Then
+          (renderNodeHash then_)
+    NIfThenElseD cond then_ else_ -> do
+      syntaxLine mempty $ do
+        syntaxKeyword mempty $ Dom.text "if"
+        down
+          (\case; IfThenElse_Cond -> Just (Refl, Refl); _ -> Nothing)
+          IfThenElse_Cond
+          (renderNodeHash cond)
+        syntaxColon mempty
+      syntaxNested mempty $
+        down
+          (\case; IfThenElse_Then -> Just (Refl, Refl); _ -> Nothing)
+          IfThenElse_Then
+          (renderNodeHash then_)
+      syntaxLine mempty $ do
+        syntaxKeyword mempty $ Dom.text "else"
+        syntaxColon mempty
+      syntaxNested mempty $
+        down
+          (\case; IfThenElse_Else -> Just (Refl, Refl); _ -> Nothing)
+          IfThenElse_Else
+          (renderNodeHash else_)
+    NPrintD val ->
+      syntaxLine mempty $ do
+        syntaxKeyword mempty $ Dom.text "print"
+        syntaxColon mempty
+        down
+          (\case; Print_Value -> Just (Refl, Refl); _ -> Nothing)
+          Print_Value
+          (renderNodeHash val)
+    NReturnD val ->
+      syntaxLine mempty $ do
+        syntaxKeyword mempty $ Dom.text "return"
+        syntaxColon mempty
+        down
+          (\case; Return_Value -> Just (Refl, Refl); _ -> Nothing)
+          Return_Value
+          (renderNodeHash val)
+    NDefD name args body -> do
+      syntaxLine mempty $ do
+        syntaxKeyword mempty $ Dom.text "def"
+        down
+          (\case; Def_Name -> Just (Refl, Refl); _ -> Nothing)
+          Def_Name
+          (renderNodeHash name)
+        syntaxLParen mempty
+        down
+          (\case; Def_Args -> Just (Refl, Refl); _ -> Nothing)
+          Def_Args
+          (renderNodeHash args)
+        syntaxRParen mempty
+        syntaxColon mempty
+      syntaxNested mempty $
+        down
+          (\case; Def_Body -> Just (Refl, Refl); _ -> Nothing)
+          Def_Body
+          (renderNodeHash body)
+    NBoolD dB ->
+      sequenceDyn_ $
+      syntaxLiteral mempty . Dom.text .
+      (\b -> if b then "true" else "false") <$> dB
+    NIntD n ->
+      sequenceDyn_ $
+      syntaxLiteral mempty . Dom.text .
+      Text.pack . show <$> n
+    NBinOpD dOp left right ->
+      syntaxInline mempty $ do
+        down
+          (\case; BinOp_Left -> Just (Refl, Refl); _ -> Nothing)
+          BinOp_Left
+          (renderNodeHash left)
+        sequenceDyn_ $
+          (\case
+            Add -> syntaxSymbol mempty $ Dom.text "+"
+            Sub -> syntaxSymbol mempty $ Dom.text "-"
+            Mul -> syntaxSymbol mempty $ Dom.text "*"
+            Div -> syntaxSymbol mempty $ Dom.text "/"
+            Eq -> syntaxSymbol mempty $ Dom.text "=="
+            And -> syntaxKeyword mempty $ Dom.text "and"
+            Or -> syntaxKeyword mempty $ Dom.text "or"
+          ) <$>
+          dOp
+        down
+          (\case; BinOp_Right -> Just (Refl, Refl); _ -> Nothing)
+          BinOp_Right
+          (renderNodeHash right)
+    NUnOpD dOp val ->
+      syntaxInline mempty $ do
+        sequenceDyn_ $
+          (\case
+            Neg -> syntaxSymbol mempty $ Dom.text "-"
+            Not -> syntaxKeyword mempty $ Dom.text "not"
+          ) <$>
+          dOp
+        down
+          (\case; UnOp_Value -> Just (Refl, Refl); _ -> Nothing)
+          UnOp_Value
+          (renderNodeHash val)
+    NCallD func args ->
+      syntaxInline mempty $ do
+        down
+          (\case; Call_Function -> Just (Refl, Refl); _ -> Nothing)
+          Call_Function
+          (renderNodeHash func)
+        syntaxLParen mempty
+        down
+          (\case; Call_Args -> Just (Refl, Refl); _ -> Nothing)
+          Call_Args
+          (renderNodeHash args)
+        syntaxRParen mempty
+    NListD exprs -> do
+      syntaxInline mempty $ do
+        syntaxLBracket mempty
+        down
+          (\case; List_Exprs -> Just (Refl, Refl); _ -> Nothing)
+          List_Exprs
+          (renderNodeHash exprs)
+        syntaxRBracket mempty
+    NExprsD xs ->
+      syntaxInline mempty $ do
+        dldX <- listDyn xs
+        forDyn_ dldX
+          (itraverse_ $
+            \ix x ->
+              down
+                (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                (Exprs_Index ix)
+                (renderNodeHash x)
+          )
+    NBlockD sts -> do
+      dldSt <- listDyn $ NonEmpty.toList <$> sts
+      forDyn_ dldSt
+        (itraverse_ $
+          \ix x ->
             down
-              (\case; BinOp_Right -> Just (Refl, Refl); _ -> Nothing)
-              BinOp_Right
-              (renderNodeHash right)
-        NUnOpD dOp val ->
-          syntaxInline mempty $ do
-            sequenceDyn_ $
-              (\case
-                Neg -> syntaxSymbol mempty $ Dom.text "-"
-                Not -> syntaxKeyword mempty $ Dom.text "not"
-              ) <$>
-              dOp
-            down
-              (\case; UnOp_Value -> Just (Refl, Refl); _ -> Nothing)
-              UnOp_Value
-              (renderNodeHash val)
-        NCallD func args ->
-          syntaxInline mempty $ do
-            down
-              (\case; Call_Function -> Just (Refl, Refl); _ -> Nothing)
-              Call_Function
-              (renderNodeHash func)
-            syntaxLParen mempty
-            down
-              (\case; Call_Args -> Just (Refl, Refl); _ -> Nothing)
-              Call_Args
-              (renderNodeHash args)
-            syntaxRParen mempty
-        NListD exprs -> do
-          syntaxInline mempty $ do
-            syntaxLBracket mempty
-            down
-              (\case; List_Exprs -> Just (Refl, Refl); _ -> Nothing)
-              List_Exprs
-              (renderNodeHash exprs)
-            syntaxRBracket mempty
-        NExprsD xs ->
-          syntaxInline mempty $ do
-            dldX <- listDyn xs
-            forDyn_ dldX
-              (itraverse_ $
-               \ix x ->
-                 down
-                   (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                   (Exprs_Index ix)
-                   (renderNodeHash x)
-              )
-        NBlockD sts -> do
-          dldSt <- listDyn $ NonEmpty.toList <$> sts
-          forDyn_ dldSt
-            (itraverse_ $
-              \ix x ->
-                down
-                  (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                  (Block_Index ix)
-                  (renderNodeHash x)
-            )
-        NArgsD xs -> do
-          syntaxInline mempty $ do
-            dldX <- listDyn xs
-            forDyn_ dldX $
-              traverse_
-                (\item ->
-                  case item of
-                    Nothing ->
-                      syntaxComma mempty
-                    Just (ix, x) ->
-                      down
-                        (\case; Args_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                        (Args_Index ix)
-                        (renderNodeHash x)
-                ) .
-                List.intersperse Nothing . fmap Just . zip [0::Int ..]
-        NParamsD xs -> do
-          syntaxInline mempty $ do
-            dldX <- listDyn xs
-            forDyn_ dldX $
-              traverse_
-                (\item ->
-                  case item of
-                    Nothing ->
-                      syntaxComma mempty
-                    Just (ix, x) ->
-                      down
-                        (\case; Params_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                        (Params_Index ix)
-                        (renderNodeHash x)
-                ) .
-                List.intersperse Nothing . fmap Just . zip [0::Int ..]
-        NSHoleD ->
-          syntaxHole mempty
-        NEHoleD ->
-          syntaxHole mempty
+              (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+              (Block_Index ix)
+              (renderNodeHash x)
+        )
+    NArgsD xs -> do
+      syntaxInline mempty $ do
+        dldX <- listDyn xs
+        forDyn_ dldX $
+          traverse_
+            (\item ->
+              case item of
+                Nothing ->
+                  syntaxComma mempty
+                Just (ix, x) ->
+                  down
+                    (\case; Args_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                    (Args_Index ix)
+                    (renderNodeHash x)
+            ) .
+            List.intersperse Nothing . fmap Just . zip [0::Int ..]
+    NParamsD xs -> do
+      syntaxInline mempty $ do
+        dldX <- listDyn xs
+        forDyn_ dldX $
+          traverse_
+            (\item ->
+              case item of
+                Nothing ->
+                  syntaxComma mempty
+                Just (ix, x) ->
+                  down
+                    (\case; Params_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                    (Params_Index ix)
+                    (renderNodeHash x)
+            ) .
+            List.intersperse Nothing . fmap Just . zip [0::Int ..]
+    NSHoleD ->
+      syntaxHole mempty
+    NEHoleD ->
+      syntaxHole mempty
