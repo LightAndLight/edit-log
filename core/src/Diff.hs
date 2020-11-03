@@ -2,9 +2,11 @@
 {-# language RankNTypes #-}
 {-# language ScopedTypeVariables #-}
 {-# language StandaloneDeriving #-}
+{-# language TypeApplications #-}
 {-# language QuantifiedConstraints #-}
 module Diff where
 
+import Data.Constraint.Extras (has)
 import Data.Foldable (foldlM, foldl')
 import Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NonEmpty
@@ -129,15 +131,15 @@ insert p c currentDiff =
     Cons l p' ->
       case currentDiff of
         Empty -> do
-          entry <- Entry l <$> Path.withKnownLevelTarget l (insert p' c emptyDiff)
+          entry <- Entry l <$> has @KnownNodeType l (insert p' c emptyDiff)
           pure $ Branch Nothing (pure entry)
         Branch branchChange entries ->
           case getEntry l entries of
             Nothing -> do
-              entry <- Entry l <$> Path.withKnownLevelTarget l (insert p' c emptyDiff)
+              entry <- Entry l <$> has @KnownNodeType l (insert p' c emptyDiff)
               pure $ Branch branchChange (NonEmpty.cons entry entries)
             Just m' -> do
-              m'' <- Path.withKnownLevelTarget l (insert p' c m')
+              m'' <- has @KnownNodeType l (insert p' c m')
               let entries' = setEntry l m'' entries
               pure $ Branch branchChange entries'
         Leaf cOuter ->
@@ -171,10 +173,10 @@ changeSequenceDiff l ix path newChange currentDiff currentSequenceDiff =
     SequenceDiff.Unknown -> do
       -- there is an insert change, but there also needs to be other changes applied to existing
       -- (non-inserted) args indices
-      entry <- Entry l <$> Path.withKnownLevelTarget l (insert path newChange emptyDiff)
+      entry <- Entry l <$> has @KnownNodeType l (insert path newChange emptyDiff)
       pure $ Branch (Just $ EditSequenceBranch currentSequenceDiff) (pure entry)
     SequenceDiff.Known statementh -> do
-      m_statementh' <- Path.withKnownLevelTarget l (applyChange path newChange statementh)
+      m_statementh' <- has @KnownNodeType l (applyChange path newChange statementh)
       pure $ case m_statementh' of
         Nothing -> currentDiff
         Just statementh' ->
@@ -261,5 +263,5 @@ fromDiff = go Nil
             )
             branchChange <>
           (NonEmpty.toList entries >>=
-           \(Entry level d') -> Path.withKnownLevelTarget level $ go (Path.snoc path level) d'
+           \(Entry level d') -> has @KnownNodeType level $ go (Path.snoc path level) d'
           )

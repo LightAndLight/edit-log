@@ -38,6 +38,7 @@ library
                      , Versioned.Pure
   build-depends:       base ^>=4.12.0.0
                      , bifunctors
+                     , constraints
                      , constraints-extras
                      , containers
                      , dependent-map

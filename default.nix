@@ -5,7 +5,7 @@ reflex-platform.project ({ pkgs, ... }: {
   packages = {
     edit-log-editor = ./editor;
     edit-log-core = ./core;
-    edit-log-renderdiff = ./renderdiff;
+    edit-log-renderdiff = ./experiments/renderdiff;
   };
 
   shells = {

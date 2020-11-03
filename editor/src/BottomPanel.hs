@@ -5,6 +5,7 @@
 {-# language RecursiveDo #-}
 {-# language ScopedTypeVariables #-}
 {-# language TemplateHaskell #-}
+{-# language TypeApplications #-}
 module BottomPanel
   ( BottomPanel(..), bpNextError, bpPrevError, bpSetFocus
   , renderBottomPanel
@@ -15,6 +16,7 @@ import Control.Lens.TH (makeLenses)
 import Control.Monad.Fix (MonadFix)
 import qualified Data.Dependent.Map as DMap
 import Data.Bifunctor.Flip (Flip(..))
+import Data.Constraint.Extras (has)
 import Data.Dependent.Sum (DSum(..))
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -114,7 +116,7 @@ renderErrors dFocus path trie = do
     leftmost <$>
     traverse
       (\(l :=> Flip trie') ->
-         Path.withKnownLevelTarget l $
+         has @KnownNodeType l $
          renderErrors
            ((\case
                  Focus (Cons l' newFocus) | Just Refl <- Path.eqLevel l l' -> Focus newFocus

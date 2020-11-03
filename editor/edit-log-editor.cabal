@@ -25,6 +25,7 @@ library
                      , edit-log-core
                      , bifunctors
                      , containers
+                     , constraints-extras
                      , dependent-map
                      , dependent-sum
                      , dependent-sum-template

@@ -1,3 +1,4 @@
+{-# language ConstraintKinds #-}
 {-# language FlexibleInstances, MultiParamTypeClasses, TypeFamilies #-}
 {-# language GADTs, KindSignatures #-}
 {-# language LambdaCase #-}
@@ -6,11 +7,14 @@
 {-# language StandaloneDeriving #-}
 {-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
+{-# language UndecidableInstances #-}
 {-# options_ghc -fno-warn-overlapping-patterns #-}
 module Path where
 
 import Control.Lens.TH (makePrisms)
 import Control.Monad (guard)
+import Data.Constraint (Dict(..))
+import Data.Constraint.Extras (ArgDict(..), has)
 import Data.Constraint.Extras.TH (deriveArgDict)
 import Data.Functor.Identity (Identity(..))
 import Data.GADT.Compare (GEq(..), GCompare(..), GOrdering(..))
@@ -20,8 +24,7 @@ import Data.Type.Equality ((:~:)(..))
 
 import Hash (Hash)
 import Node (Node(..))
-import NodeType (KnownNodeType, nodeType)
-import qualified NodeType
+import NodeType (KnownNodeType)
 import Syntax
   ( Expr(..), Statement(..), Block(..), Ident, Args(..), Params(..)
   , Exprs(..)
@@ -545,6 +548,14 @@ data Path a :: * -> * where
   Nil :: Path a a
   Cons :: Level a b -> Path b c -> Path a c
 deriving instance Show (Path a b)
+instance ArgDict c (Path a) where
+  type ConstraintsFor (Path a) c = (c a, ConstraintsFor (Level a) c)
+  argDict path =
+    case path of
+      Nil ->
+        Dict
+      Cons l rest ->
+        has @c l (argDict rest)
 
 data SomePath a where
   SomePath :: KnownNodeType b => Path a b -> SomePath a
@@ -619,38 +630,3 @@ modify p f = runIdentity . traversal p (Identity . f)
 
 set :: Path a b -> b -> a -> a
 set p v = modify p (const v)
-
-withKnownLevelTarget :: forall a b r. KnownNodeType a => Level a b -> (KnownNodeType b => r) -> r
-withKnownLevelTarget l k =
-  case l of
-    For_Ident -> k
-    For_Expr -> k
-    For_Block -> k
-    IfThen_Cond -> k
-    IfThen_Then -> k
-    IfThenElse_Cond -> k
-    IfThenElse_Then -> k
-    IfThenElse_Else -> k
-    Print_Value -> k
-    Return_Value -> k
-    Def_Name -> k
-    Def_Args -> k
-    Def_Body -> k
-    BinOp_Left -> k
-    BinOp_Right -> k
-    UnOp_Value -> k
-    Call_Function -> k
-    Call_Args -> k
-    List_Exprs -> k
-    Exprs_Index{} -> k
-    Block_Index{} -> k
-    Args_Index{} -> k
-    Params_Index{} -> k
-
-showingPathTarget :: forall a b r. KnownNodeType a => Path a b -> (Show b => r) -> r
-showingPathTarget path f =
-  case path of
-    Nil ->
-      NodeType.showingNodeType (nodeType @a) f
-    Cons l rest ->
-      withKnownLevelTarget l (showingPathTarget rest f)

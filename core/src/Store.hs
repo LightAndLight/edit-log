@@ -13,6 +13,7 @@ import Control.Monad.Reader (ReaderT)
 import Control.Monad.State (StateT)
 import Control.Monad.Trans.Class (MonadTrans, lift)
 import Control.Monad.Trans.Maybe (MaybeT(..), runMaybeT)
+import Data.Constraint.Extras (has)
 import qualified Data.List.NonEmpty as NonEmpty
 
 import Hash (Hash)
@@ -54,7 +55,7 @@ modifyH path_ f_ = runMaybeT . go path_ f_
           case Path.downLevelNode level node of
             Nothing -> empty
             Just (nextHash, mkNode) -> do
-              nextHash' <- Path.withKnownLevelTarget level (go path' f nextHash)
+              nextHash' <- has @KnownNodeType level (go path' f nextHash)
               lift . addNode $ mkNode nextHash'
 
 setH :: (KnownNodeType a, MonadStore m) => Path a b -> Hash b -> Hash a -> m (Maybe (Hash a, Hash b))
@@ -70,7 +71,7 @@ setH path val hash = do
           case Path.downLevelNode level node of
             Nothing -> pure Nothing
             Just (nextHash, mkNode) -> do
-              mRes <- Path.withKnownLevelTarget level $ setH path' val nextHash
+              mRes <- has @KnownNodeType level $ setH path' val nextHash
               case mRes of
                 Nothing ->
                   pure Nothing
@@ -134,7 +135,7 @@ delete path ix hash = do
           case Path.downLevelNode level node of
             Nothing -> pure Nothing
             Just (nextHash, mkNode) -> do
-              mRes <- Path.withKnownLevelTarget level $ delete path' ix nextHash
+              mRes <- has @KnownNodeType level $ delete path' ix nextHash
               case mRes of
                 Nothing -> pure Nothing
                 Just (nextHash', deleted) ->
