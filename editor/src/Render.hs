@@ -274,21 +274,24 @@ renderNodeHash dHash = do
       eMouseleave = switchDyn $ Dom.domEvent Dom.Mouseleave <$> dNodeElement
       eMousedown = switchDyn $ Dom.domEvent Dom.Mousedown <$> dNodeElement
 
-      dChildHovered = dRenderNodeInfo <&> view rniHovered
 
     dMouseInside <-
       case nodeType @b of
-        TBlock -> pure dChildHovered
-        _ -> holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
+        TBlock ->
+          pure $ view rniHovered <$> dRenderNodeInfo
+        _ ->
+          holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
     dHovered <-
       case nodeType @b of
         TBlock -> pure $ constDyn False
         _ ->
           holdUniqDyn $
-          (\inFocus inside children -> inside && not children && not inFocus) <$>
+          (\inFocus inside childInfo ->
+             inside && not (childInfo ^. rniHovered) && not inFocus
+          ) <$>
           dInFocus <*>
           dMouseInside <*>
-          dChildHovered
+          dRenderNodeInfo
 
     let eClicked = gate (current dHovered) eMousedown
 
