@@ -10,7 +10,6 @@
 {-# language TypeApplications #-}
 module Main where
 
-import Data.List.NonEmpty as NonEmpty
 import Control.Lens.Getter ((^.), view)
 import Control.Lens.TH (makeLenses)
 import Control.Monad (when)
@@ -865,7 +864,7 @@ main = do
                , ecSetFocus = bottomPanel ^. bpSetFocus
                }
              initialProgram =
-               Block . NonEmpty.fromList $ replicate 100 (IfThenElse EHole (Block $ pure SHole) (Block $ pure SHole))
+               Block [SHole]
              initialFocus =
                Focus $ Cons (Block_Index 0) Nil
            editor <-
