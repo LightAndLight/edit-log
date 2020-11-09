@@ -14,6 +14,7 @@ where
 import Control.Monad (join)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
+import Data.Constraint.Extras (has)
 import Data.Foldable (for_)
 import Data.Functor (($>))
 import qualified Data.List as List
@@ -56,6 +57,15 @@ data ContextMenuEvent a where
   Choose :: KnownNodeType b => Path a b -> b -> ContextMenuEvent a
   Next :: ContextMenuEvent a
   Prev :: ContextMenuEvent a
+instance Show a => Show (ContextMenuEvent a) where
+  showsPrec d (Choose p (b :: b)) =
+    showParen (d > 10) $
+    showString "Choose " .
+    showsPrec 11 p .
+    showString " " .
+    has @Show (nodeType @b) (showsPrec 11 b)
+  showsPrec _ Next = showString "Next"
+  showsPrec _ Prev = showString "Prev"
 
 data MenuEntryIndex
   = MenuEntry Int

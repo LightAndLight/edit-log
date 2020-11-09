@@ -16,6 +16,7 @@ library
                      , ContextMenu
                      , Focus
                      , List.Dynamic
+                     , Maybe.Dynamic
                      , Navigation
                      , Node.Dynamic
                      , Render

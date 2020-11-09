@@ -17,9 +17,11 @@ import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Trans.Class (lift)
 import Data.Char (isLetter)
+import Data.Constraint.Extras (has)
 import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity(..))
 import Data.Functor.Misc (Const2(..))
+import qualified Data.List.NonEmpty as NonEmpty
 import qualified Data.Map as Map
 import qualified Data.Maybe as Maybe
 import qualified Data.Set as Set
@@ -181,6 +183,27 @@ data EditAction a where
   SetFocus :: Focus a -> EditAction a
   Undo :: EditAction a
   Redo :: EditAction a
+instance Show a => Show (EditAction a) where
+  showsPrec d (Replace p (b :: b)) =
+    showParen (d > 10) $
+    showString "Replace " .
+    showsPrec 11 p .
+    showString " " .
+    has @Show (nodeType @b) (showsPrec 11 b)
+  showsPrec _ InsertBefore = showString "InsertBefore"
+  showsPrec _ InsertAfter = showString "After"
+  showsPrec _ NextHole = showString "NextHole"
+  showsPrec _ PrevHole = showString "PrevHole"
+  showsPrec d (Delete a) =
+    showParen (d > 10) $
+    showString "Delete " .
+    showsPrec 11 a
+  showsPrec d (SetFocus f) =
+    showParen (d > 10) $
+    showString "SetFocus " .
+    showsPrec 11 f
+  showsPrec _ Undo = showString "Undo"
+  showsPrec _ Redo = showString "Redo"
 
 data EditorState a
   = EditorState
@@ -370,6 +393,7 @@ renderEditor keys editorControls initial initialFocus =
       let
         bMenuClosed = (MenuClosed ==) <$> current dMenu
         eReplace =
+          traceEvent "replace" $
           fmapMaybe
             (\case
               ContextMenuEvent event ->
@@ -411,10 +435,10 @@ renderEditor keys editorControls initial initialFocus =
         foldDyn
           runEditAction
           (EditorState
-          { esVersioned = initialVersioned
-          , esSession = initialSession
-          , esFocus = initialFocus
-          }
+           { esVersioned = initialVersioned
+           , esSession = initialSession
+           , esFocus = initialFocus
+           }
           )
           (leftmost
            [ eReplace
@@ -429,28 +453,34 @@ renderEditor keys editorControls initial initialFocus =
            ]
           )
 
-      dRootHash <-
-        holdUniqDyn $
-        (\versioned -> let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot in rooth) <$>
-        dVersioned
+      let
+        getHash versioned = let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot in rooth
+        initialRootHash = getHash initialVersioned
+      dRootHash <- holdUniqDyn $ getHash <$> dVersioned
 
       let
+        mkCheckResult rootHash versioned =
+          let
+            Identity (res, _) =
+              runVersionedT versioned .
+              Check.runCheckT Check.newCheckEnv Check.newCheckState $
+              Check.check Nil rootHash
+          in
+            res
+        initialCheckResult = mkCheckResult initialRootHash initialVersioned
+
         dCheckResult :: Dynamic t (Either (Trie a CheckError) ())
         dCheckResult =
-          (\rootHash versioned ->
-            let
-              Identity (res, _) =
-                runVersionedT versioned .
-                Check.runCheckT Check.newCheckEnv Check.newCheckState $
-                Check.check Nil rootHash
-            in
-              res
-          ) <$>
+          mkCheckResult <$>
           dRootHash <*>
           dVersioned
 
+        mkErrors = either id (const Trie.empty)
+
+        initialErrors = mkErrors initialCheckResult
+
         dErrors :: Dynamic t (Trie a CheckError)
-        dErrors = either id (const Trie.empty) <$> dCheckResult
+        dErrors = mkErrors <$> dCheckResult
 
       dMenu <-
         holdDyn
@@ -471,7 +501,9 @@ renderEditor keys editorControls initial initialFocus =
           { _rnContextMenuControls = contextMenuControls
           , _rnNodeControls = nodeControls
           , _rnMenu = dMenu
+          , _rnInitialErrors = initialErrors
           , _rnErrors = dErrors
+          , _rnInitialVersioned = initialVersioned
           , _rnVersioned = dVersioned
           , _rnFocus = dFocus
           , _rnPath = Nil
@@ -480,7 +512,7 @@ renderEditor keys editorControls initial initialFocus =
       (dRenderNodeHash', eRenderNode) <- do
         (((), dRenderNodeInfo), _eRenderNode) <-
           runEventWriterT . runDynamicWriterT . flip runReaderT renderNodeEnv $
-          renderNodeHash dRootHash
+          renderNodeHash initialRootHash dRootHash
         pure (dRenderNodeInfo, _eRenderNode)
 
       let
@@ -490,7 +522,7 @@ renderEditor keys editorControls initial initialFocus =
         dFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
         dFocusElement = dRenderNodeHash' <&> view rniFocusElement
 
-      let eNode = leftmost [ContextMenuEvent <$> eContextMenu, eRenderNode]
+      let eNode = traceEvent "node" $ leftmost [ContextMenuEvent <$> eContextMenu, eRenderNode]
 
       eContextMenu :: Event t (ContextMenuEvent a) <-
         renderContextMenu contextMenuControls dMenu dFocus dFocusElement
@@ -864,7 +896,7 @@ main = do
                , ecSetFocus = bottomPanel ^. bpSetFocus
                }
              initialProgram =
-               Block [SHole]
+               Block . NonEmpty.fromList $ replicate 1 SHole
              initialFocus =
                Focus $ Cons (Block_Index 0) Nil
            editor <-

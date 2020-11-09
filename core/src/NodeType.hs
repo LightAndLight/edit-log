@@ -1,3 +1,4 @@
+{-# language FlexibleInstances, MultiParamTypeClasses, TypeFamilies #-}
 {-# language GADTs, KindSignatures #-}
 {-# language StandaloneDeriving #-}
 {-# language RankNTypes #-}
@@ -5,6 +6,7 @@
 {-# language TypeOperators #-}
 module NodeType where
 
+import Data.Constraint.Extras.TH (deriveArgDict)
 import Data.GADT.Compare (geq)
 import Data.GADT.Compare.TH (deriveGEq)
 import Data.GADT.Show.TH (deriveGShow)
@@ -23,6 +25,7 @@ data NodeType :: * -> * where
   TExprs :: NodeType Exprs
 deriveGShow ''NodeType
 deriveGEq ''NodeType
+deriveArgDict ''NodeType
 deriving instance Show (NodeType a)
 instance Hashable (NodeType a) where
   hashWithSalt s nt =

@@ -25,51 +25,74 @@ import Syntax (Statement, Expr, Block, Ident, UnOp, BinOp, Params, Args, Exprs)
 
 data NodeD t :: * -> * where
   NForD ::
+    Hash Ident ->
+    Hash Expr ->
+    Hash Block ->
     Dynamic t (Hash Ident) ->
     Dynamic t (Hash Expr) ->
     Dynamic t (Hash Block) ->
     NodeD t Statement
   NIfThenD ::
+    Hash Expr ->
+    Hash Block ->
     Dynamic t (Hash Expr) ->
     Dynamic t (Hash Block) ->
     NodeD t Statement
   NIfThenElseD ::
+    Hash Expr ->
+    Hash Block ->
+    Hash Block ->
     Dynamic t (Hash Expr) ->
     Dynamic t (Hash Block) ->
     Dynamic t (Hash Block) ->
     NodeD t Statement
   NPrintD ::
+    Hash Expr ->
     Dynamic t (Hash Expr) ->
     NodeD t Statement
   NReturnD ::
+    Hash Expr ->
     Dynamic t (Hash Expr) ->
     NodeD t Statement
   NDefD ::
+    Hash Ident ->
+    Hash Params ->
+    Hash Block ->
     Dynamic t (Hash Ident) ->
     Dynamic t (Hash Params) ->
     Dynamic t (Hash Block) ->
     NodeD t Statement
 
   NBoolD ::
+    Bool ->
     Dynamic t Bool ->
     NodeD t Expr
   NIntD ::
+    Int ->
     Dynamic t Int ->
     NodeD t Expr
   NBinOpD ::
+    BinOp ->
+    Hash Expr ->
+    Hash Expr ->
     Dynamic t BinOp ->
     Dynamic t (Hash Expr) ->
     Dynamic t (Hash Expr) ->
     NodeD t Expr
   NUnOpD ::
+    UnOp ->
+    Hash Expr ->
     Dynamic t UnOp ->
     Dynamic t (Hash Expr) ->
     NodeD t Expr
   NCallD ::
+    Hash Expr ->
+    Hash Args ->
     Dynamic t (Hash Expr) ->
     Dynamic t (Hash Args) ->
     NodeD t Expr
   NListD ::
+    Hash Exprs ->
     Dynamic t (Hash Exprs) ->
     NodeD t Expr
   NEIdentD ::
@@ -77,6 +100,7 @@ data NodeD t :: * -> * where
     NodeD t Expr
 
   NBlockD ::
+    NonEmpty (Hash Statement) ->
     Dynamic t (NonEmpty (Hash Statement)) ->
     NodeD t Block
 
@@ -85,12 +109,15 @@ data NodeD t :: * -> * where
     NodeD t Ident
 
   NExprsD ::
+    [Hash Expr] ->
     Dynamic t [Hash Expr] ->
     NodeD t Exprs
   NArgsD ::
+    [Hash Expr] ->
     Dynamic t [Hash Expr] ->
     NodeD t Args
   NParamsD ::
+    [Hash Ident] ->
     Dynamic t [Hash Ident] ->
     NodeD t Params
 
@@ -328,180 +355,183 @@ uniqDyn initial eUpdate = holdUniqDyn =<< holdDyn initial eUpdate
 nodeDyn ::
   forall t m a.
   (Reflex t, MonadHold t m, MonadFix m, Adjustable t m) =>
-  Dynamic t (Node a) ->
-  m (Dynamic t (NodeD t a))
-nodeDyn dNode = do
-  let fanned = fanNode $ updated dNode
+  Node a ->
+  Event t (Node a) ->
+  m (NodeD t a, Dynamic t (NodeD t a))
+nodeDyn initialNode eNodeUpdated = do
+  let
+    eNodeUpdated' :: EventSelector t (NodeTag a)
+    eNodeUpdated' = fanNode eNodeUpdated
   rec
+    initialNodeD <- inner initialNode eNodeUpdated'
     dNodeD <-
       Dom.widgetHold
-        (inner fanned dNode)
+        (pure initialNodeD)
         (attachWithMaybe
           (\now next ->
              case now of
                NForD{} ->
                  case next of
                    NFor{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NIfThenD{} ->
                  case next of
                    NIfThen{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NIfThenElseD{} ->
                  case next of
                    NIfThenElse{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NPrintD{} ->
                  case next of
                    NPrint{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NReturnD{} ->
                  case next of
                    NReturn{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NDefD{} ->
                  case next of
                    NDef{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NBoolD{} ->
                  case next of
                    NBool{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NIntD{} ->
                  case next of
                    NInt{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NBinOpD{} ->
                  case next of
                    NBinOp{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NUnOpD{} ->
                  case next of
                    NUnOp{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NCallD{} ->
                  case next of
                    NCall{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NListD{} ->
                  case next of
                    NList{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NEIdentD{} ->
                  case next of
                    NEIdent{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NBlockD{} ->
                  case next of
                    NBlock{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NIdentD{} ->
                  case next of
                    NIdent{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NExprsD{} ->
                  case next of
                    NExprs{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NArgsD{} ->
                  case next of
                    NArgs{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NParamsD{} ->
                  case next of
                    NParams{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NSHoleD{} ->
                  case next of
                    NSHole{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NEHoleD{} ->
                  case next of
                    NEHole{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
                NIHoleD{} ->
                  case next of
                    NIHole{} -> Nothing
-                   _ -> Just $ inner fanned dNode
+                   _ -> Just $ inner next eNodeUpdated'
           )
           (current dNodeD)
-          (updated dNode)
+          eNodeUpdated
         )
-  pure dNodeD
+  pure (initialNodeD, dNodeD)
   where
-    inner :: EventSelector t (NodeTag a) -> Dynamic t (Node a) -> m (NodeD t a)
-    inner fanned dNode' = do
-      node <- sample $ current dNode'
-      case node of
+    inner :: Node a -> EventSelector t (NodeTag a) -> m (NodeD t a)
+    inner initialNode' eNodeUpdated' = do
+      case initialNode' of
         NFor i e b ->
-          NForD <$>
-          uniqDyn i (fmapCheap (view _1) (select fanned NTagFor)) <*>
-          uniqDyn e (fmapCheap (view _2) (select fanned NTagFor)) <*>
-          uniqDyn b (fmapCheap (view _3) (select fanned NTagFor))
+          NForD i e b <$>
+          uniqDyn i (fmapCheap (view _1) (select eNodeUpdated' NTagFor)) <*>
+          uniqDyn e (fmapCheap (view _2) (select eNodeUpdated' NTagFor)) <*>
+          uniqDyn b (fmapCheap (view _3) (select eNodeUpdated' NTagFor))
         NIfThen c t ->
-          NIfThenD <$>
-          uniqDyn c (fmapCheap (view _1) (select fanned NTagIfThen)) <*>
-          uniqDyn t (fmapCheap (view _2) (select fanned NTagIfThen))
+          NIfThenD c t <$>
+          uniqDyn c (fmapCheap (view _1) (select eNodeUpdated' NTagIfThen)) <*>
+          uniqDyn t (fmapCheap (view _2) (select eNodeUpdated' NTagIfThen))
         NIfThenElse c t e ->
-          NIfThenElseD <$>
-          uniqDyn c (fmapCheap (view _1) (select fanned NTagIfThenElse)) <*>
-          uniqDyn t (fmapCheap (view _2) (select fanned NTagIfThenElse)) <*>
-          uniqDyn e (fmapCheap (view _3) (select fanned NTagIfThenElse))
+          NIfThenElseD c t e <$>
+          uniqDyn c (fmapCheap (view _1) (select eNodeUpdated' NTagIfThenElse)) <*>
+          uniqDyn t (fmapCheap (view _2) (select eNodeUpdated' NTagIfThenElse)) <*>
+          uniqDyn e (fmapCheap (view _3) (select eNodeUpdated' NTagIfThenElse))
         NPrint v ->
-          NPrintD <$>
-          uniqDyn v (select fanned NTagPrint)
+          NPrintD v <$>
+          uniqDyn v (select eNodeUpdated' NTagPrint)
         NReturn v ->
-          NReturnD <$>
-          uniqDyn v (select fanned NTagReturn)
+          NReturnD v <$>
+          uniqDyn v (select eNodeUpdated' NTagReturn)
         NDef n ps b ->
-          NDefD <$>
-          uniqDyn n (fmapCheap (view _1) (select fanned NTagDef)) <*>
-          uniqDyn ps (fmapCheap (view _2) (select fanned NTagDef)) <*>
-          uniqDyn b (fmapCheap (view _3) (select fanned NTagDef))
+          NDefD n ps b <$>
+          uniqDyn n (fmapCheap (view _1) (select eNodeUpdated' NTagDef)) <*>
+          uniqDyn ps (fmapCheap (view _2) (select eNodeUpdated' NTagDef)) <*>
+          uniqDyn b (fmapCheap (view _3) (select eNodeUpdated' NTagDef))
 
         NBool b ->
-          NBoolD <$>
-          uniqDyn b (select fanned NTagBool)
+          NBoolD b <$>
+          uniqDyn b (select eNodeUpdated' NTagBool)
         NInt n ->
-          NIntD <$>
-          uniqDyn n (select fanned NTagInt)
+          NIntD n <$>
+          uniqDyn n (select eNodeUpdated' NTagInt)
         NBinOp op l r ->
-          NBinOpD <$>
-          uniqDyn op (fmapCheap (view _1) (select fanned NTagBinOp)) <*>
-          uniqDyn l (fmapCheap (view _2) (select fanned NTagBinOp)) <*>
-          uniqDyn r (fmapCheap (view _3) (select fanned NTagBinOp))
+          NBinOpD op l r <$>
+          uniqDyn op (fmapCheap (view _1) (select eNodeUpdated' NTagBinOp)) <*>
+          uniqDyn l (fmapCheap (view _2) (select eNodeUpdated' NTagBinOp)) <*>
+          uniqDyn r (fmapCheap (view _3) (select eNodeUpdated' NTagBinOp))
         NUnOp op v ->
-          NUnOpD <$>
-          uniqDyn op (fmapCheap (view _1) (select fanned NTagUnOp)) <*>
-          uniqDyn v (fmapCheap (view _2) (select fanned NTagUnOp))
+          NUnOpD op v <$>
+          uniqDyn op (fmapCheap (view _1) (select eNodeUpdated' NTagUnOp)) <*>
+          uniqDyn v (fmapCheap (view _2) (select eNodeUpdated' NTagUnOp))
         NCall f x ->
-          NCallD <$>
-          uniqDyn f (fmapCheap (view _1) (select fanned NTagCall)) <*>
-          uniqDyn x (fmapCheap (view _2) (select fanned NTagCall))
+          NCallD f x <$>
+          uniqDyn f (fmapCheap (view _1) (select eNodeUpdated' NTagCall)) <*>
+          uniqDyn x (fmapCheap (view _2) (select eNodeUpdated' NTagCall))
         NList es ->
-          NListD <$>
-          holdDyn es (select fanned NTagList)
+          NListD es <$>
+          holdDyn es (select eNodeUpdated' NTagList)
         NEIdent i ->
           NEIdentD <$>
-          uniqDyn i (select fanned NTagEIdent)
+          uniqDyn i (select eNodeUpdated' NTagEIdent)
 
         NBlock bs ->
-          NBlockD <$>
-          holdDyn bs (select fanned NTagBlock)
+          NBlockD bs <$>
+          holdDyn bs (select eNodeUpdated' NTagBlock)
 
         NIdent i ->
           NIdentD <$>
-          uniqDyn i (select fanned NTagIdent)
+          uniqDyn i (select eNodeUpdated' NTagIdent)
 
         NExprs es ->
-          NExprsD <$>
-          holdDyn es (select fanned NTagExprs)
+          NExprsD es <$>
+          holdDyn es (select eNodeUpdated' NTagExprs)
         NArgs es ->
-          NArgsD <$>
-          holdDyn es (select fanned NTagArgs)
+          NArgsD es <$>
+          holdDyn es (select eNodeUpdated' NTagArgs)
         NParams es ->
-          NParamsD <$>
-          holdDyn es (select fanned NTagParams)
+          NParamsD es <$>
+          holdDyn es (select eNodeUpdated' NTagParams)
 
         NSHole -> pure NSHoleD
         NEHole -> pure NEHoleD

@@ -7,6 +7,7 @@
 {-# language RankNTypes #-}
 {-# language RecursiveDo #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
+{-# language StandaloneDeriving #-}
 {-# language TemplateHaskell #-}
 {-# language TypeOperators #-}
 module Render
@@ -22,12 +23,13 @@ module Render
   )
 where
 
+import Control.Monad.IO.Class
+
 import Control.Applicative ((<|>))
 import Control.Lens.Indexed (itraverse_)
 import Control.Lens.Getter ((^.), view, views)
 import Control.Lens.Setter (ASetter, (.~))
 import Control.Lens.TH (makeClassy, makeLenses)
-import Control.Monad (join)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, ask)
 import Data.Foldable (traverse_)
@@ -43,7 +45,7 @@ import qualified GHCJS.DOM.HTMLElement as HTMLElement
 import GHCJS.DOM.Types (HTMLElement(..))
 import qualified GHCJS.DOM.Types as GHCJS.DOM
 import Language.Javascript.JSaddle.Monad (MonadJSM)
-import Reflex
+import Reflex hiding (maybeDyn)
 import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace)
 import qualified Reflex.Dom as Dom
 import qualified Reflex.Network
@@ -60,10 +62,12 @@ import Syntax (BinOp(..), UnOp(..))
 import qualified Store
 import Versioned.Pure (Versioned, runVersionedT)
 
+
 import Attrs
 import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..))
 import Focus (Focus(..))
 import List.Dynamic (listDyn)
+import Maybe.Dynamic (maybeDyn)
 import Node.Dynamic (NodeD(..), nodeDyn)
 import Svg (svgElAttr)
 
@@ -71,23 +75,6 @@ networkHold_ :: (Adjustable t m, MonadHold t m) => m a -> Event t (m a) -> m ()
 networkHold_ child0 newChild = do
   (_, _) <- runWithReplace child0 newChild
   pure ()
-
-sequenceDyn_ :: (MonadHold t m, Adjustable t m) => Dynamic t (m a) -> m ()
-sequenceDyn_ d = networkHold_ (join $ sample (current d)) (updated d)
-
-forDyn_ ::
-  (MonadHold t m, Adjustable t m) =>
-  Dynamic t a ->
-  (a -> m b) ->
-  m ()
-forDyn_ d f = networkHold_ (f =<< sample (current d)) (f <$> updated d)
-
-forDyn ::
-  (MonadHold t m, Adjustable t m) =>
-  Dynamic t a ->
-  (a -> m b) ->
-  m (Dynamic t b)
-forDyn d f = Reflex.Network.networkHold (f =<< sample (current d)) (f <$> updated d)
 
 svgUnderline ::
   (DomBuilder t m, PostBuild t m) =>
@@ -192,12 +179,24 @@ data NodeEvent a where
   CloseMenu :: NodeEvent a
   ContextMenuEvent :: ContextMenuEvent a -> NodeEvent a
   Select :: KnownNodeType b => Path a b -> NodeEvent a
+instance Show a => Show (NodeEvent a) where
+  showsPrec _ OpenMenu = showString "OpenMenu"
+  showsPrec _ CloseMenu = showString "OpenMenu"
+  showsPrec d (ContextMenuEvent e) =
+    showParen (d > 10) $
+    showString "ContextMenuEvent " .
+    showsPrec 11 e
+  showsPrec d (Select p) =
+    showParen (d > 10) $
+    showString "Select " .
+    showsPrec 11 p
 
 instance Semigroup (NodeEvent a) where
   l <> _ = l
 
 data FocusedNode a where
   FocusedNode :: KnownNodeType b => Path a b -> Hash b -> Node b -> FocusedNode a
+deriving instance Show (FocusedNode a)
 
 data RenderNodeInfo t a
   = RenderNodeInfo
@@ -226,7 +225,9 @@ data RenderNodeEnv t a b
   { _rnContextMenuControls :: ContextMenuControls t
   , _rnNodeControls :: NodeControls t
   , _rnMenu :: Dynamic t Menu
+  , _rnInitialErrors :: Trie b CheckError
   , _rnErrors :: Dynamic t (Trie b CheckError)
+  , _rnInitialVersioned :: Versioned a
   , _rnVersioned :: Dynamic t (Versioned a)
   , _rnFocus :: Dynamic t (Focus b)
   , _rnPath :: Path a b
@@ -256,22 +257,24 @@ renderNodeHash ::
 
   , DynamicWriter t (RenderNodeInfo t a) m
   , EventWriter t (NodeEvent a) m
+
+  , Show a
   ) =>
+  Hash b ->
   Dynamic t (Hash b) ->
   m ()
-renderNodeHash dHash = do
+renderNodeHash initialHash dHash = do
+  initialVersioned <- view rnInitialVersioned
   dVersioned <- view rnVersioned
   let
-    dmNode =
-      (\h versioned ->
-          let
-            Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
-          in
-            (,) h <$> mNode
-      ) <$>
-      dHash <*>
-      dVersioned
-  renderMaybeNode dmNode
+    getNode h versioned =
+      let
+        Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
+      in
+        (,) h <$> mNode
+  renderMaybeNode
+    (getNode initialHash initialVersioned)
+    (traceDyn "node" $ getNode <$> dHash <*> dVersioned)
 
 down ::
   ( Monad m
@@ -284,13 +287,16 @@ down ::
   ReaderT (RenderNodeEnv t a b') m res ->
   m res
 down match build m = do
+  let downErrors = Maybe.fromMaybe Trie.empty . Trie.down build
   env <- ask
   runReaderT m $
     RenderNodeEnv
     { _rnContextMenuControls = env ^. rnContextMenuControls
     , _rnNodeControls = env ^. rnNodeControls
     , _rnMenu = env ^. rnMenu
-    , _rnErrors = Maybe.fromMaybe Trie.empty . Trie.down build <$> view rnErrors env
+    , _rnInitialErrors = downErrors $ view rnInitialErrors env
+    , _rnErrors = downErrors <$> view rnErrors env
+    , _rnInitialVersioned = env ^. rnInitialVersioned
     , _rnVersioned = env ^. rnVersioned
     , _rnFocus =
       view rnFocus env <&>
@@ -310,11 +316,12 @@ errorUnderline ::
   , PerformEvent t m, MonadJSM (Performable m)
   , MonadJSM m
   ) =>
-  Dynamic t Bool ->
+  Bool ->
+  Event t Bool ->
   m a ->
   m ()
-errorUnderline dHasError m =
-  forDyn_ dHasError drawWhenHasError
+errorUnderline initialHasError eHasErrorUpdated m =
+  networkHold_ (drawWhenHasError initialHasError) (drawWhenHasError <$> eHasErrorUpdated)
   where
     drawWhenHasError hasError =
       if hasError
@@ -348,13 +355,21 @@ renderMaybeNode ::
 
   , DynamicWriter t (RenderNodeInfo t a) m
   , EventWriter t (NodeEvent a) m
+
+  , Show a
   ) =>
+  Maybe (Hash b, Node b) ->
   Dynamic t (Maybe (Hash b, Node b)) ->
   m ()
-renderMaybeNode dmNode = do
-  dHasError <-
-    holdUniqDyn =<<
-    views rnErrors (fmap $ maybe False (const True) . Trie.current)
+renderMaybeNode initialmNode dmNode = do
+  initialErrors <- view rnInitialErrors
+  dErrors <- view rnErrors
+  let
+    mkHasError = maybe False (const True) . Trie.current
+    initialHasError = mkHasError initialErrors
+    eHasErrorUpdated = mkHasError <$> updated dErrors
+
+  dHasError <- holdUniqDyn $ mkHasError <$> dErrors
 
   dInFocus <-
     holdUniqDyn =<<
@@ -386,16 +401,17 @@ renderMaybeNode dmNode = do
         dHasError <*>
         dInFocus
 
-    dmNodeFactored <- maybeDyn dmNode
-    (dElementHovered :: Dynamic t Bool, _dElement) <-
-      fmap (\d -> (d >>= fst, snd <$> d)) . forDyn dmNodeFactored $
-      \mdNode -> do
+    let
+      rendermNodeFactored ::
+        Maybe ((Hash b, Node b), Dynamic t (Hash b, Node b)) ->
+        m (Dynamic t Bool, Dom.Element Dom.EventResult GhcjsDomSpace t)
+      rendermNodeFactored mdNode = do
         (element, dRenderNodeInfo) <-
-          runDynamicWriterT . fmap fst . syntaxNodeD' dAttrs . errorUnderline dHasError $
+          runDynamicWriterT . fmap fst . syntaxNodeD' dAttrs . errorUnderline initialHasError eHasErrorUpdated $
           case mdNode of
             Nothing ->
               Dom.text "error: missing node"
-            Just dNode -> do
+            Just (initialNode, dNode) -> do
               path <- view rnPath
               scribeDyn @t @(RenderNodeInfo t a) rniFocusNode $
                 (\inFocus (hash, node) ->
@@ -406,9 +422,9 @@ renderMaybeNode dmNode = do
                 dInFocus <*>
                 dNode
 
-              dNodeD <- nodeDyn (snd <$> dNode)
+              (initialNodeD, dNodeD) <- nodeDyn (snd initialNode) (snd <$> traceEvent "eNode" (updated dNode))
 
-              forDyn_ dNodeD renderNodeD
+              networkHold_ (renderNodeD initialNodeD) (renderNodeD <$> traceEventWith (\case; NDefD{} -> "yes"; _ -> "no") (updated dNodeD))
         let
           eMouseenter = Dom.domEvent Dom.Mouseenter element
           eMouseleave = Dom.domEvent Dom.Mouseleave element
@@ -467,9 +483,17 @@ renderMaybeNode dmNode = do
         tellEvent eSelect
 
         pure (dHovered, element)
+
+    (initialmNodeFactored, dmNodeFactored) <- maybeDyn initialmNode dmNode
+    (dElementHovered :: Dynamic t Bool, _dElement) <-
+      fmap (\d -> (d >>= fst, snd <$> d)) $
+      Reflex.Network.networkHold
+        (rendermNodeFactored initialmNodeFactored)
+        (rendermNodeFactored <$> updated dmNodeFactored)
   pure ()
 
 renderNodeD ::
+  forall t m r a b.
   ( DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
   , MonadHold t m
   , PerformEvent t m, MonadJSM (Performable m)
@@ -483,6 +507,8 @@ renderNodeD ::
   , MonadJSM m
   , DynamicWriter t (RenderNodeInfo t a) m
   , EventWriter t (NodeEvent a) m
+
+  , Show a
   ) =>
   NodeD t b ->
   m ()
@@ -494,50 +520,50 @@ renderNodeD node =
       Dom.dyn_ $ Dom.text . Text.pack <$> n
     NIHoleD ->
       syntaxHole mempty
-    NForD ident val body -> do
+    NForD initialIdent initialVal initialBody ident val body -> do
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "for"
         down
           (\case; For_Ident -> Just (Refl, Refl); _ -> Nothing)
           For_Ident
-          (renderNodeHash ident)
+          (renderNodeHash initialIdent ident)
         syntaxKeyword mempty $ Dom.text "in"
         down
           (\case; For_Expr -> Just (Refl, Refl); _ -> Nothing)
           For_Expr
-          (renderNodeHash val)
+          (renderNodeHash initialVal val)
         syntaxColon mempty
       syntaxNested mempty $
         down
           (\case; For_Block -> Just (Refl, Refl); _ -> Nothing)
           For_Block
-          (renderNodeHash body)
-    NIfThenD cond then_ -> do
+          (renderNodeHash initialBody body)
+    NIfThenD initialCond initialThen cond then_ -> do
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "if"
         down
           (\case; IfThen_Cond -> Just (Refl, Refl); _ -> Nothing)
           IfThen_Cond
-          (renderNodeHash cond)
+          (renderNodeHash initialCond cond)
         syntaxColon mempty
       syntaxNested mempty $
         down
           (\case; IfThen_Then -> Just (Refl, Refl); _ -> Nothing)
           IfThen_Then
-          (renderNodeHash then_)
-    NIfThenElseD cond then_ else_ -> do
+          (renderNodeHash initialThen then_)
+    NIfThenElseD initialCond initialThen initialElse cond then_ else_ -> do
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "if"
         down
           (\case; IfThenElse_Cond -> Just (Refl, Refl); _ -> Nothing)
           IfThenElse_Cond
-          (renderNodeHash cond)
+          (renderNodeHash initialCond cond)
         syntaxColon mempty
       syntaxNested mempty $
         down
           (\case; IfThenElse_Then -> Just (Refl, Refl); _ -> Nothing)
           IfThenElse_Then
-          (renderNodeHash then_)
+          (renderNodeHash initialThen then_)
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "else"
         syntaxColon mempty
@@ -545,58 +571,57 @@ renderNodeD node =
         down
           (\case; IfThenElse_Else -> Just (Refl, Refl); _ -> Nothing)
           IfThenElse_Else
-          (renderNodeHash else_)
-    NPrintD val ->
+          (renderNodeHash initialElse else_)
+    NPrintD initialVal val ->
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "print"
         syntaxColon mempty
         down
           (\case; Print_Value -> Just (Refl, Refl); _ -> Nothing)
           Print_Value
-          (renderNodeHash val)
-    NReturnD val ->
+          (renderNodeHash initialVal val)
+    NReturnD initialVal val ->
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "return"
         syntaxColon mempty
         down
           (\case; Return_Value -> Just (Refl, Refl); _ -> Nothing)
           Return_Value
-          (renderNodeHash val)
-    NDefD name args body -> do
+          (renderNodeHash initialVal val)
+    NDefD initialName initialArgs initialBody name args body -> do
       syntaxLine mempty $ do
+        liftIO $ putStrLn "test"
         syntaxKeyword mempty $ Dom.text "def"
         down
           (\case; Def_Name -> Just (Refl, Refl); _ -> Nothing)
           Def_Name
-          (renderNodeHash name)
+          (renderNodeHash initialName name)
         syntaxLParen mempty
         down
           (\case; Def_Args -> Just (Refl, Refl); _ -> Nothing)
           Def_Args
-          (renderNodeHash args)
+          (renderNodeHash initialArgs args)
         syntaxRParen mempty
         syntaxColon mempty
       syntaxNested mempty $
         down
           (\case; Def_Body -> Just (Refl, Refl); _ -> Nothing)
           Def_Body
-          (renderNodeHash body)
-    NBoolD dB ->
-      sequenceDyn_ $
-      syntaxLiteral mempty . Dom.text .
-      (\b -> if b then "true" else "false") <$> dB
-    NIntD n ->
-      sequenceDyn_ $
-      syntaxLiteral mempty . Dom.text .
-      Text.pack . show <$> n
-    NBinOpD dOp left right ->
-      syntaxInline mempty $ do
-        down
-          (\case; BinOp_Left -> Just (Refl, Refl); _ -> Nothing)
-          BinOp_Left
-          (renderNodeHash left)
-        sequenceDyn_ $
-          (\case
+          (renderNodeHash initialBody body)
+    NBoolD initialB dB ->
+      let
+        render b = syntaxLiteral mempty . Dom.text $ if b then "true" else "false"
+      in
+        networkHold_ (render initialB) (render <$> updated dB)
+    NIntD initialN n ->
+      let
+        render = syntaxLiteral mempty . Dom.text . Text.pack . show
+      in
+        networkHold_ (render initialN) (render <$> updated n)
+    NBinOpD initialOp initialLeft initialRight dOp left right ->
+      let
+        renderOp =
+          \case
             Add -> syntaxSymbol mempty $ Dom.text "+"
             Sub -> syntaxSymbol mempty $ Dom.text "-"
             Mul -> syntaxSymbol mempty $ Dom.text "*"
@@ -604,97 +629,112 @@ renderNodeD node =
             Eq -> syntaxSymbol mempty $ Dom.text "=="
             And -> syntaxKeyword mempty $ Dom.text "and"
             Or -> syntaxKeyword mempty $ Dom.text "or"
-          ) <$>
-          dOp
-        down
-          (\case; BinOp_Right -> Just (Refl, Refl); _ -> Nothing)
-          BinOp_Right
-          (renderNodeHash right)
-    NUnOpD dOp val ->
-      syntaxInline mempty $ do
-        sequenceDyn_ $
-          (\case
+      in
+        syntaxInline mempty $ do
+          down
+            (\case; BinOp_Left -> Just (Refl, Refl); _ -> Nothing)
+            BinOp_Left
+            (renderNodeHash initialLeft left)
+          networkHold_ (renderOp initialOp) (renderOp <$> updated dOp)
+          down
+            (\case; BinOp_Right -> Just (Refl, Refl); _ -> Nothing)
+            BinOp_Right
+            (renderNodeHash initialRight right)
+    NUnOpD initialOp initialVal dOp val ->
+      let
+        renderOp =
+          \case
             Neg -> syntaxSymbol mempty $ Dom.text "-"
             Not -> syntaxKeyword mempty $ Dom.text "not"
-          ) <$>
-          dOp
-        down
-          (\case; UnOp_Value -> Just (Refl, Refl); _ -> Nothing)
-          UnOp_Value
-          (renderNodeHash val)
-    NCallD func args ->
+      in
+        syntaxInline mempty $ do
+          networkHold_ (renderOp initialOp) (renderOp <$> updated dOp)
+          down
+            (\case; UnOp_Value -> Just (Refl, Refl); _ -> Nothing)
+            UnOp_Value
+            (renderNodeHash initialVal val)
+    NCallD initialFunc initialArgs func args ->
       syntaxInline mempty $ do
         down
           (\case; Call_Function -> Just (Refl, Refl); _ -> Nothing)
           Call_Function
-          (renderNodeHash func)
+          (renderNodeHash initialFunc func)
         syntaxLParen mempty
         down
           (\case; Call_Args -> Just (Refl, Refl); _ -> Nothing)
           Call_Args
-          (renderNodeHash args)
+          (renderNodeHash initialArgs args)
         syntaxRParen mempty
-    NListD exprs -> do
+    NListD initialExprs exprs -> do
       syntaxInline mempty $ do
         syntaxLBracket mempty
         down
           (\case; List_Exprs -> Just (Refl, Refl); _ -> Nothing)
           List_Exprs
-          (renderNodeHash exprs)
+          (renderNodeHash initialExprs exprs)
         syntaxRBracket mempty
-    NExprsD xs ->
-      syntaxInline mempty $ do
-        dldX <- listDyn xs
-        forDyn_ dldX
-          (itraverse_ $
-            \ix x ->
-              down
-                (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                (Exprs_Index ix)
-                (renderNodeHash x)
-          )
-    NBlockD sts -> do
-      dldSt <- listDyn $ NonEmpty.toList <$> sts
-      forDyn_ dldSt
-        (itraverse_ $
-          \ix x ->
-            down
-              (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-              (Block_Index ix)
-              (renderNodeHash x)
-        )
-    NArgsD xs -> do
-      syntaxInline mempty $ do
-        dldX <- listDyn xs
-        forDyn_ dldX $
+    NExprsD initialXs xs ->
+      let
+        render =
+          itraverse_
+             (\ix (initialX, x) ->
+               down
+                 (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                 (Exprs_Index ix)
+                 (renderNodeHash initialX x)
+             )
+      in
+        syntaxInline mempty $ do
+          (initialldX, dldX) <- listDyn initialXs xs
+          networkHold_ (render $ initialldX) (render <$> updated dldX)
+    NBlockD initialSts sts -> do
+      let
+        render =
+          itraverse_
+            (\ix (initialX, x) ->
+               down
+                 (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
+                 (Block_Index ix)
+                 (renderNodeHash initialX x)
+            )
+      (initialldSt, dldSt) <- listDyn (NonEmpty.toList initialSts) (NonEmpty.toList <$> sts)
+      networkHold_ (render $ initialldSt) (render <$> updated dldSt)
+    NArgsD initialXs xs -> do
+      let
+        render =
           traverse_
             (\item ->
               case item of
                 Nothing ->
                   syntaxComma mempty
-                Just (ix, x) ->
+                Just (ix, (initialX, x)) ->
                   down
                     (\case; Args_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
                     (Args_Index ix)
-                    (renderNodeHash x)
+                    (renderNodeHash initialX x)
             ) .
             List.intersperse Nothing . fmap Just . zip [0::Int ..]
-    NParamsD xs -> do
       syntaxInline mempty $ do
-        dldX <- listDyn xs
-        forDyn_ dldX $
+        (initialldX, dldX) <- listDyn initialXs xs
+        networkHold_ (render $ initialldX) (render <$> updated dldX)
+    NParamsD initialXs xs -> do
+      let
+        render =
           traverse_
             (\item ->
               case item of
                 Nothing ->
                   syntaxComma mempty
-                Just (ix, x) ->
+                Just (ix, (initialX, x)) ->
                   down
                     (\case; Params_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
                     (Params_Index ix)
-                    (renderNodeHash x)
+                    (renderNodeHash initialX x)
             ) .
             List.intersperse Nothing . fmap Just . zip [0::Int ..]
+      syntaxInline mempty $ do
+        (initialldX, dldX) <- listDyn initialXs xs
+        networkHold_ (render $ initialldX) (render <$> updated dldX)
     NSHoleD ->
       syntaxHole mempty
     NEHoleD ->
