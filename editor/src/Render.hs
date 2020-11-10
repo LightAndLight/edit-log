@@ -134,19 +134,16 @@ renderNodeHash ::
   Hash b ->
   m ()
 renderNodeHash versioned hash = do
-  rec
-    eHash <-
-      attachWithMaybe
-        (\old located ->
-           case located of
-             Located Nil new | old /= new ->
-               Just new
-             _ ->
-               Nothing
-        )
-        bHash <$>
-      view rnHashChanged
-    bHash <- hold hash eHash
+  eHash <-
+    fmapMaybe
+      (\located ->
+          case located of
+            Located Nil new ->
+              Just new
+            _ ->
+              Nothing
+      ) <$>
+    view rnHashChanged
 
   eVersioned <- view rnVersionedChanged
   bVersioned <- view rnVersioned
