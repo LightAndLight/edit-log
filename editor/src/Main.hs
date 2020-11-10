@@ -12,13 +12,13 @@ module Main where
 
 import Control.Lens.Getter ((^.), view)
 import Control.Lens.TH (makeLenses)
+import Control.Lens.Tuple (_1, _2, _3)
 import Control.Monad (when)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (runReaderT)
 import Control.Monad.Trans.Class (lift)
 import Data.Char (isLetter)
 import Data.Constraint.Extras (has)
-import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity(..))
 import Data.Functor.Misc (Const2(..))
 import qualified Data.List.NonEmpty as NonEmpty
@@ -36,15 +36,25 @@ import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace, HasDocument, main
 import qualified Reflex.Dom as Dom
 
 import Check (CheckError)
-import qualified Check
+-- import qualified Check
+import Hash (Hash)
 import Log (Entry, Time)
-import Node (Node(..))
-import NodeType (KnownNodeType, NodeType(..), nodeType)
+-- import Node (Node(..))
+import NodeType
+  ( KnownNodeType
+  -- , NodeType(..)
+  , nodeType
+  )
 import Path (Path(..), Level(..), SomePath(..))
 import qualified Path
 import Path.Trie (Trie)
 import qualified Path.Trie as Trie
-import Syntax (Block(..), Statement(..), Expr(..), Ident(..))
+import Syntax
+  ( Block(..)
+  , Statement(..)
+  , Expr(..)
+  -- , Ident(..)
+  )
 import Session (Session, newSession)
 import qualified Session
 import Session.Pure (runSessionT)
@@ -55,11 +65,7 @@ import BottomPanel (renderBottomPanel, bpNextError, bpPrevError, bpSetFocus)
 import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..), renderContextMenu)
 import Focus (Focus(..))
 import qualified Navigation
-import Render
-  ( NodeControls(..), NodeEvent(..), RenderNodeEnv(..), FocusedNode(..)
-  , rniFocusElement, rniFocusNode
-  , renderNodeHash
-  )
+import Render (NodeControls(..), NodeEvent(..), RenderNodeEnv(..), ChildInfo(..), renderNodeHash)
 import Svg (svgEl, svgElAttr)
 
 data DocumentKeys t
@@ -179,7 +185,7 @@ data EditAction a where
   InsertAfter :: EditAction a
   NextHole :: EditAction a
   PrevHole :: EditAction a
-  Delete :: FocusedNode a -> EditAction a
+  -- Delete :: FocusedNode a -> EditAction a
   SetFocus :: Focus a -> EditAction a
   Undo :: EditAction a
   Redo :: EditAction a
@@ -194,10 +200,12 @@ instance Show a => Show (EditAction a) where
   showsPrec _ InsertAfter = showString "After"
   showsPrec _ NextHole = showString "NextHole"
   showsPrec _ PrevHole = showString "PrevHole"
+  {-
   showsPrec d (Delete a) =
     showParen (d > 10) $
     showString "Delete " .
     showsPrec 11 a
+-}
   showsPrec d (SetFocus f) =
     showParen (d > 10) $
     showString "SetFocus " .
@@ -264,6 +272,7 @@ runEditAction action editorState =
                   pure focus
           | otherwise ->
               pure focus
+              {-
         Delete (FocusedNode path hash (node :: Node b)) ->
           case nodeType @b of
             TIdent ->
@@ -312,6 +321,7 @@ runEditAction action editorState =
                   pure focus
             _ ->
               pure focus
+-}
         Undo -> do
           mRes <- Session.undo
           pure $
@@ -367,7 +377,7 @@ renderEditor ::
   a ->
   Focus a ->
   m (Editor t a)
-renderEditor keys editorControls initial initialFocus =
+renderEditor keys _editorControls initial initialFocus =
   Dom.elAttr "div" [("id", "editor")] $ do
     let
       contextMenuControls =
@@ -379,108 +389,27 @@ renderEditor keys editorControls initial initialFocus =
 
       nodeControls =
         NodeControls
-        { ncOpenMenu = dkSpace keys
-        , ncCloseMenu = dkEscape keys
+        { _ncOpenMenu = dkSpace keys
+        , _ncCloseMenu = dkEscape keys
         }
 
       initialVersioned :: Versioned a
       initialVersioned = newVersioned initial
 
-      initialSession :: Session (Time, Entry a, SomePath a)
-      initialSession = newSession
+      _initialSession :: Session (Time, Entry a, SomePath a)
+      _initialSession = newSession
+
+      initialRootHash =
+        let
+          Identity (rooth, _) = runVersionedT initialVersioned Versioned.getRoot
+        in
+          rooth
 
     rec
       let
-        bMenuClosed = (MenuClosed ==) <$> current dMenu
-        eReplace =
-          traceEvent "replace" $
-          fmapMaybe
-            (\case
-              ContextMenuEvent event ->
-                case event of
-                  Choose path a -> Just $ Replace path a
-                  _ -> Nothing
-              _ -> Nothing
-            )
-            eNode
-        eSetFocus =
-          leftmost
-          [ SetFocus <$> ecSetFocus editorControls
-          , fmapMaybe
-              (\case
-                Select path -> Just . SetFocus $ Focus path
-                _ -> Nothing
-              )
-              eNode
-          ]
-        eNextHole = gate bMenuClosed (NextHole <$ ecNextHole editorControls)
-        ePrevHole = gate bMenuClosed (PrevHole <$ ecPrevHole editorControls)
-        eInsertBefore = gate bMenuClosed (InsertBefore <$ ecNewLineAbove editorControls)
-        eInsertAfter = gate bMenuClosed (InsertAfter <$ ecNewLineBelow editorControls)
-        eDelete =
-          attachWithMaybe
-            (\(menuClosed, mFocusNode) () ->
-              case mFocusNode of
-                Just focusNode | menuClosed ->
-                  Just $ Delete focusNode
-                _ -> Nothing
-            )
-            ((,) <$> bMenuClosed <*> current dFocusNode)
-            (ecDelete editorControls)
-        eUndo = gate bMenuClosed (Undo <$ ecUndo editorControls)
-        eRedo = gate bMenuClosed (Redo <$ ecRedo editorControls)
-
-      (dVersioned, _dSession, dFocus) <-
-        (\d -> (esVersioned <$> d, esSession <$> d, esFocus <$> d)) <$>
-        foldDyn
-          runEditAction
-          (EditorState
-           { esVersioned = initialVersioned
-           , esSession = initialSession
-           , esFocus = initialFocus
-           }
-          )
-          (leftmost
-           [ eReplace
-           , eSetFocus
-           , eNextHole
-           , ePrevHole
-           , eInsertBefore
-           , eInsertAfter
-           , eDelete
-           , eUndo
-           , eRedo
-           ]
-          )
-
-      let
-        getHash versioned = let Identity (rooth, _) = runVersionedT versioned Versioned.getRoot in rooth
-        initialRootHash = getHash initialVersioned
-      dRootHash <- holdUniqDyn $ getHash <$> dVersioned
-
-      let
-        mkCheckResult rootHash versioned =
-          let
-            Identity (res, _) =
-              runVersionedT versioned .
-              Check.runCheckT Check.newCheckEnv Check.newCheckState $
-              Check.check Nil rootHash
-          in
-            res
-        initialCheckResult = mkCheckResult initialRootHash initialVersioned
-
-        dCheckResult :: Dynamic t (Either (Trie a CheckError) ())
-        dCheckResult =
-          mkCheckResult <$>
-          dRootHash <*>
-          dVersioned
-
-        mkErrors = either id (const Trie.empty)
-
-        initialErrors = mkErrors initialCheckResult
-
         dErrors :: Dynamic t (Trie a CheckError)
-        dErrors = mkErrors <$> dCheckResult
+        dErrors = constDyn Trie.empty
+          -- mkErrors <$> dCheckResult
 
       dMenu <-
         holdDyn
@@ -489,43 +418,68 @@ renderEditor keys editorControls initial initialFocus =
             (\case
               CloseMenu -> Just MenuClosed
               OpenMenu -> Just MenuOpen
-              ContextMenuEvent Choose{} -> Just MenuClosed
               _ -> Nothing
             )
             eNode
           )
 
       let
-        renderNodeEnv =
-          RenderNodeEnv
-          { _rnContextMenuControls = contextMenuControls
-          , _rnNodeControls = nodeControls
-          , _rnMenu = dMenu
-          , _rnInitialErrors = initialErrors
-          , _rnErrors = dErrors
-          , _rnInitialVersioned = initialVersioned
-          , _rnVersioned = dVersioned
-          , _rnFocus = dFocus
-          , _rnPath = Nil
-          }
+        eStep :: Event t (Maybe (Hash a), Maybe (Focus a), Maybe (Versioned a))
+        eStep =
+          attachWithMaybe
+            (\old event ->
+               case event of
+                 Left contextMenuEvent ->
+                   case contextMenuEvent of
+                     Choose path val ->
+                       let
+                         Identity (newRoot, new) =
+                           runVersionedT old $ do
+                             _ <- Versioned.replace path val
+                             Versioned.getRoot
 
-      (dRenderNodeHash', eRenderNode) <- do
-        (((), dRenderNodeInfo), _eRenderNode) <-
-          runEventWriterT . runDynamicWriterT . flip runReaderT renderNodeEnv $
-          renderNodeHash initialRootHash dRootHash
-        pure (dRenderNodeInfo, _eRenderNode)
+                         mFocus = Navigation.nextHole new path
+                       in
+                         Just (Just newRoot, mFocus, Just new)
+                     _ -> Nothing
+                 Right nodeEvent ->
+                   case nodeEvent of
+                     Select p ->
+                       Just (Nothing, Just (Focus p), Nothing)
+                     _ -> Nothing
+            )
+            bVersioned
+            (leftmost [Left <$> eContextMenu, Right <$> eNode])
+
+        (eHashChanged, eFocusChanged, eVersionUpdated) =
+          (fmapMaybe (view _1) eStep, fmapMaybe (view _2) eStep, fmapMaybe (view _3) eStep)
+
+      bVersioned <- hold initialVersioned eVersionUpdated
 
       let
-        dFocusNode :: Dynamic t (Maybe (FocusedNode a))
-        dFocusNode = dRenderNodeHash' <&> view rniFocusNode
+        renderNodeEnv =
+          RenderNodeEnv
+          { _rnVersioned = bVersioned
+          , _rnVersionedChanged = eVersionUpdated
+          , _rnPath = Nil
+          , _rnFocus = initialFocus
+          , _rnFocusChanged = eFocusChanged
+          , _rnHashChanged = eHashChanged
+          , _rnNodeControls = nodeControls
+          }
 
-        dFocusElement :: Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
-        dFocusElement = dRenderNodeHash' <&> view rniFocusElement
+      (((), eNode), dChildInfo) <-
+        runDynamicWriterT . runEventWriterT $
+        runReaderT (renderNodeHash initialVersioned initialRootHash) renderNodeEnv
 
-      let eNode = traceEvent "node" $ leftmost [ContextMenuEvent <$> eContextMenu, eRenderNode]
-
+      dFocus <- holdDyn initialFocus eFocusChanged
+      let dFocusElement = _ciFocusElement <$> dChildInfo
       eContextMenu :: Event t (ContextMenuEvent a) <-
-        renderContextMenu contextMenuControls dMenu dFocus dFocusElement
+        renderContextMenu
+          contextMenuControls
+          dMenu
+          dFocus
+          dFocusElement
 
     pure $ Editor { _eFocus = dFocus, _eErrors = dErrors }
 
@@ -896,7 +850,7 @@ main = do
                , ecSetFocus = bottomPanel ^. bpSetFocus
                }
              initialProgram =
-               Block . NonEmpty.fromList $ replicate 1 SHole
+               Block . NonEmpty.fromList $ replicate 100 (IfThenElse EHole (Block [SHole]) (Block [SHole]))
              initialFocus =
                Focus $ Cons (Block_Index 0) Nil
            editor <-

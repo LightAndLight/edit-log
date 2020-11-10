@@ -1,92 +1,297 @@
 {-# language FlexibleContexts #-}
-{-# language FlexibleInstances, FunctionalDependencies, MultiParamTypeClasses #-}
-{-# language GADTs, KindSignatures #-}
+{-# language GADTs #-}
 {-# language LambdaCase #-}
-{-# language OverloadedLists #-}
 {-# language OverloadedStrings #-}
 {-# language RankNTypes #-}
 {-# language RecursiveDo #-}
-{-# language ScopedTypeVariables, TypeApplications #-}
-{-# language StandaloneDeriving #-}
+{-# language ScopedTypeVariables #-}
 {-# language TemplateHaskell #-}
+{-# language TypeApplications #-}
 {-# language TypeOperators #-}
+{-# options_ghc -fno-warn-overlapping-patterns #-}
 module Render
-  ( NodeControls(..), NodeEvent(..), FocusedNode(..)
+  ( NodeControls(..), NodeEvent(..)
   , RenderNodeEnv(..)
-  , RenderNodeInfo(..)
-  , rniHovered
-  , rniFocusElement
-  , rniFocusNode
+  , ChildInfo(..)
   , renderNodeHash
-  , syntaxNode
-  , syntaxNode'
   )
 where
 
-import Control.Monad.IO.Class
-
 import Control.Applicative ((<|>))
+import Control.Lens.Getter ((^.), view)
 import Control.Lens.Indexed (itraverse_)
-import Control.Lens.Getter ((^.), view, views)
-import Control.Lens.Setter (ASetter, (.~))
-import Control.Lens.TH (makeClassy, makeLenses)
+import Control.Lens.Setter (locally)
+import Control.Lens.TH (makeLenses)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, ask)
+import qualified Data.Dependent.Map as DMap
 import Data.Foldable (traverse_)
-import Data.Function ((&))
-import Data.Functor ((<&>))
 import Data.Functor.Identity (Identity(..))
+import Data.GADT.Compare (GEq(..), GCompare(..), (:~:)(..), GOrdering(..))
 import qualified Data.List as List
-import qualified Data.List.NonEmpty as NonEmpty
-import qualified Data.Maybe as Maybe
 import qualified Data.Text as Text
-import Data.Type.Equality ((:~:)(..))
-import qualified GHCJS.DOM.HTMLElement as HTMLElement
-import GHCJS.DOM.Types (HTMLElement(..))
-import qualified GHCJS.DOM.Types as GHCJS.DOM
-import Language.Javascript.JSaddle.Monad (MonadJSM)
-import Reflex hiding (maybeDyn)
+import Reflex
 import Reflex.Dom (DomBuilder, DomBuilderSpace, GhcjsDomSpace)
 import qualified Reflex.Dom as Dom
-import qualified Reflex.Network
 
-import Check (CheckError)
 import Hash (Hash)
 import Node (Node(..))
 import NodeType (KnownNodeType, NodeType(..), nodeType)
-import Path (Path(..), Level(..))
+import Path (Level(..), Path(..))
 import qualified Path
-import Path.Trie (Trie)
-import qualified Path.Trie as Trie
-import Syntax (BinOp(..), UnOp(..))
 import qualified Store
+import Syntax (BinOp(..), UnOp(..))
 import Versioned.Pure (Versioned, runVersionedT)
 
-
-import Attrs
-import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..))
+import Attrs (Attrs, unAttrs, (=:))
 import Focus (Focus(..))
-import List.Dynamic (listDyn)
-import Maybe.Dynamic (maybeDyn)
-import Node.Dynamic (NodeD(..), nodeDyn)
-import Svg (svgElAttr)
 
-networkHold_ :: (Adjustable t m, MonadHold t m) => m a -> Event t (m a) -> m ()
-networkHold_ child0 newChild = do
-  (_, _) <- runWithReplace child0 newChild
-  pure ()
+data NodeControls t
+  = NodeControls
+  { _ncOpenMenu :: Event t ()
+  , _ncCloseMenu :: Event t ()
+  }
+makeLenses ''NodeControls
 
-svgUnderline ::
-  (DomBuilder t m, PostBuild t m) =>
-  (Int, Int) ->
-  Int ->
+data NodeEvent a where
+  OpenMenu :: NodeEvent a
+  CloseMenu :: NodeEvent a
+  Select :: KnownNodeType b => Path a b -> NodeEvent a
+instance Show a => Show (NodeEvent a) where
+  showsPrec _ OpenMenu = showString "OpenMenu"
+  showsPrec _ CloseMenu = showString "CloseMenu"
+  showsPrec d (Select p) =
+    showParen (d > 10) $
+    showString "Select " .
+    showsPrec 11 p
+
+instance Semigroup (NodeEvent a) where
+  l <> _ = l
+
+data Change a b x where
+  NewVersioned :: Change a b (Versioned a)
+  NewHash :: Change a b (Hash b)
+  NewFocus :: Change a b (Focus b)
+
+instance GEq (Change a b) where
+  geq NewVersioned NewVersioned = Just Refl
+  geq NewVersioned _ = Nothing
+  geq _ NewVersioned = Nothing
+
+  geq NewHash NewHash = Just Refl
+  geq NewHash _ = Nothing
+  geq _ NewHash = Nothing
+
+  geq NewFocus NewFocus = Just Refl
+  geq NewFocus _ = Nothing
+  geq _ NewFocus = Nothing
+
+instance GCompare (Change a b) where
+  gcompare NewVersioned NewVersioned = GEQ
+  gcompare NewVersioned _ = GLT
+  gcompare _ NewVersioned = GGT
+
+  gcompare NewHash NewHash = GEQ
+  gcompare NewHash _ = GLT
+  gcompare _ NewHash = GGT
+
+  gcompare NewFocus NewFocus = GEQ
+  gcompare NewFocus _ = GLT
+  gcompare _ NewFocus = GGT
+
+data RenderNodeEnv t a b
+  = RenderNodeEnv
+  { _rnVersioned :: Behavior t (Versioned a)
+  , _rnVersionedChanged :: Event t (Versioned a)
+  , _rnPath :: Path a b
+  , _rnFocus :: Focus b
+  , _rnFocusChanged :: Event t (Focus b)
+  , _rnHashChanged :: Event t (Hash b)
+  , _rnNodeControls :: NodeControls t
+  }
+makeLenses ''RenderNodeEnv
+
+data ChildInfo t
+  = ChildInfo
+  { _ciAnyMouseOver :: Dynamic t Bool
+  , _ciFocusElement :: Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)
+  }
+
+renderNodeHash ::
+  forall t m a b.
+  ( MonadHold t m, Adjustable t m
+  , DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
+  , MonadReader (RenderNodeEnv t a b) m
+  , EventWriter t (NodeEvent a) m
+  , DynamicWriter t (ChildInfo t) m
+  , PostBuild t m
+  , KnownNodeType b
+  , MonadFix m
+  ) =>
+  Versioned a ->
+  Hash b ->
   m ()
-svgUnderline (x, y) width =
-  svgElAttr "svg" (dimensions <> [("style", "position: absolute; left: " <> Text.pack (show x) <> "px; top: " <> Text.pack (show y) <> "px;")]) $
-  svgElAttr "rect" (dimensions <> [("fill", "url(#zig)")]) $
-  pure ()
+renderNodeHash versioned hash = do
+  rec
+    eHash <-
+      attachWithMaybe (\old new -> if old == new then Nothing else Just new) bHash <$>
+      view rnHashChanged
+    bHash <- hold hash eHash
+
+  eVersioned <- view rnVersionedChanged
+  bVersioned <- view rnVersioned
+
+  focus <- view rnFocus
+  eFocus <- view rnFocusChanged
+  bFocus <- hold focus eFocus
+
+  Dom.widgetHold_
+    (renderMaybeNode versioned $ getNode versioned hash)
+    (attachWithMaybe
+       (\(v, f, h) change -> do
+          (v', f', h') <-
+            case (DMap.lookup NewVersioned change, DMap.lookup NewFocus change, DMap.lookup NewHash change) of
+              (Nothing, Nothing, Nothing) -> Nothing
+              (Just (Identity v'), Nothing, Nothing) -> pure (v', f, h)
+              (Nothing, Just (Identity f'), Nothing) -> pure (v, f', h)
+              (Nothing, Nothing, Just (Identity h')) -> pure (v, f, h')
+              (Just (Identity v'), Nothing, Just (Identity h')) -> pure (v', f, h')
+              (Just (Identity v'), Just (Identity f'), Nothing) -> pure (v', f', h)
+              (Nothing, Just (Identity f'), Just (Identity h')) -> pure (v, f', h')
+              (Just (Identity v'), Just (Identity f'), Just (Identity h')) -> pure (v', f', h')
+          pure $
+            locally rnFocus (const f') $
+            renderMaybeNode v' (getNode v' h')
+       )
+       ((,,) <$> bVersioned <*> bFocus <*> bHash)
+       (mergeWith (<>)
+         [ DMap.singleton NewVersioned . pure <$> eVersioned
+         , DMap.singleton NewHash . pure <$> eHash
+         , DMap.singleton NewFocus . pure <$> eFocus
+         ]
+       )
+    )
   where
-    dimensions = [("width", Text.pack $ show width), ("height", "2.5")]
+    getNode :: Versioned a -> Hash b -> Maybe (Node b)
+    getNode v h =
+      let
+        Identity (mNode, _) = runVersionedT v (Store.lookupNode h)
+      in
+        mNode
+
+isHole :: Node a -> Bool
+isHole n =
+  case n of
+    NFor{} -> False
+    NIfThen{} -> False
+    NIfThenElse{} -> False
+    NPrint{} -> False
+    NReturn{} -> False
+    NDef{} -> False
+    NBool{} -> False
+    NInt{} -> False
+    NEIdent{} -> False
+    NBinOp{} -> False
+    NUnOp{} -> False
+    NCall{} -> False
+    NList{} -> False
+    NExprs{} -> False
+    NBlock{} -> False
+    NIdent{} -> False
+    NArgs{} -> False
+    NParams{} -> False
+
+    NSHole{} -> True
+    NEHole{} -> True
+    NIHole{} -> True
+
+renderMaybeNode ::
+  forall t m a b.
+  ( MonadHold t m, Adjustable t m
+  , DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
+  , MonadReader (RenderNodeEnv t a b) m
+  , EventWriter t (NodeEvent a) m
+  , DynamicWriter t (ChildInfo t) m
+  , PostBuild t m
+  , KnownNodeType b
+  , MonadFix m
+  ) =>
+  Versioned a ->
+  Maybe (Node b) ->
+  m ()
+renderMaybeNode versioned mNode =
+  case mNode of
+    Nothing ->
+      Dom.text "error: missing node"
+    Just node -> do
+      let
+        mkAttrs focused hovered =
+          ("class" =: "syntax-node") <>
+          (if focused then "class" =: "syntax-focused" else mempty) <>
+          (if isHole node then "class" =: "syntax-hole" else mempty) <>
+          (case nodeType @b of
+            TExpr -> "class" =: "syntax-expr"
+            TBlock -> "class" =: "syntax-block"
+            TStatement -> "class" =: "syntax-statement"
+            TIdent -> "class" =: "syntax-ident"
+            TArgs -> "class" =: "syntax-args"
+            TParams -> "class" =: "syntax-params"
+            TExprs -> "class" =: "syntax-exprs"
+          ) <>
+          (if hovered && not focused then "class" =: "syntax-hovered" else mempty)
+
+      let isFocused = \case; Focus Nil -> True; _ -> False
+      focus <- view rnFocus
+      dFocused <- do
+        eFocusChanged <- view rnFocusChanged
+        holdDyn (isFocused focus) (isFocused <$> eFocusChanged)
+
+      rec
+        let
+          eMouseenter = Dom.domEvent Dom.Mouseenter element
+          eMouseleave = Dom.domEvent Dom.Mouseleave element
+          dMouseOverChild = dChildInfo >>= _ciAnyMouseOver
+
+        dMouseOver <-
+          holdDyn False (leftmost [True <$ eMouseenter, False <$ eMouseleave])
+
+        let
+          dHovered =
+            (\mouseOverChild mouseOverMe ->
+               case nodeType @b of
+                 TBlock -> False
+                 _ -> not mouseOverChild && mouseOverMe
+            ) <$>
+            dMouseOverChild <*>
+            dMouseOver
+
+        let dAttrs = mkAttrs <$> dFocused <*> dHovered
+
+        ((element, ()), dChildInfo) <-
+          runDynamicWriterT .
+          Dom.elDynAttr' "div" (fmap unAttrs dAttrs) $
+          renderNode versioned node
+
+      let eMousedown = Dom.domEvent Dom.Mousedown element
+
+      tellDyn . pure $ mempty { _ciAnyMouseOver = dMouseOver }
+      tellDyn $
+        (\x -> (mempty @(ChildInfo t)) { _ciFocusElement = _ciFocusElement x }) <$>
+        dChildInfo
+      tellDyn $
+        (\focused -> (mempty @(ChildInfo t)) { _ciFocusElement = if focused then Just element else Nothing }) <$>
+        dFocused
+
+      path <- view rnPath
+      tellEvent $ Select path <$ gate (current dHovered) eMousedown
+
+      eOpenMenu <- view $ rnNodeControls.ncOpenMenu
+      tellEvent $ OpenMenu <$ gate (current dFocused) eOpenMenu
+
+      eCloseMenu <- view $ rnNodeControls.ncCloseMenu
+      tellEvent $ CloseMenu <$ gate (current dFocused) eCloseMenu
+
+      pure ()
 
 syntaxHole :: DomBuilder t m => Attrs -> m ()
 syntaxHole attrs =
@@ -95,22 +300,6 @@ syntaxHole attrs =
 
 syntaxInline :: DomBuilder t m => Attrs -> m a -> m a
 syntaxInline attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-inline" <> attrs
-
-syntaxLine :: DomBuilder t m => Attrs -> m a -> m a
-syntaxLine attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-line" <> attrs
-
-syntaxNode :: DomBuilder t m => Attrs -> m a -> m a
-syntaxNode attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-node" <> attrs
-
-syntaxNode' :: DomBuilder t m => Attrs -> m a -> m (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a)
-syntaxNode' attrs = Dom.elAttr' "div" . unAttrs $ "class" =: "syntax-node" <> attrs
-
-syntaxNodeD' ::
-  (DomBuilder t m, PostBuild t m) =>
-  Dynamic t Attrs ->
-  m a ->
-  m (Dom.Element Dom.EventResult (DomBuilderSpace m) t, a)
-syntaxNodeD' attrs = Dom.elDynAttr' "div" . fmap unAttrs $ ("class" =: "syntax-node" <>) <$> attrs
 
 syntaxKeyword :: DomBuilder t m => Attrs -> m a -> m a
 syntaxKeyword attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-keyword" <> attrs
@@ -142,600 +331,286 @@ syntaxComma attrs = syntaxSymbol ("class" =: "syntax-comma" <> attrs) $ Dom.text
 syntaxNested :: DomBuilder t m => Attrs -> m a -> m a
 syntaxNested attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-nested" <> attrs
 
-isHole :: Node a -> Bool
-isHole n =
-  case n of
-    NFor{} -> False
-    NIfThen{} -> False
-    NIfThenElse{} -> False
-    NPrint{} -> False
-    NReturn{} -> False
-    NDef{} -> False
-    NBool{} -> False
-    NInt{} -> False
-    NEIdent{} -> False
-    NBinOp{} -> False
-    NUnOp{} -> False
-    NCall{} -> False
-    NList{} -> False
-    NExprs{} -> False
-    NBlock{} -> False
-    NIdent{} -> False
-    NArgs{} -> False
-    NParams{} -> False
+syntaxLine :: DomBuilder t m => Attrs -> m a -> m a
+syntaxLine attrs = Dom.elAttr "div" . unAttrs $ "class" =: "syntax-line" <> attrs
 
-    NSHole{} -> True
-    NEHole{} -> True
-    NIHole{} -> True
-
-data NodeControls t
-  = NodeControls
-  { ncOpenMenu :: Event t ()
-  , ncCloseMenu :: Event t ()
-  }
-
-data NodeEvent a where
-  OpenMenu :: NodeEvent a
-  CloseMenu :: NodeEvent a
-  ContextMenuEvent :: ContextMenuEvent a -> NodeEvent a
-  Select :: KnownNodeType b => Path a b -> NodeEvent a
-instance Show a => Show (NodeEvent a) where
-  showsPrec _ OpenMenu = showString "OpenMenu"
-  showsPrec _ CloseMenu = showString "OpenMenu"
-  showsPrec d (ContextMenuEvent e) =
-    showParen (d > 10) $
-    showString "ContextMenuEvent " .
-    showsPrec 11 e
-  showsPrec d (Select p) =
-    showParen (d > 10) $
-    showString "Select " .
-    showsPrec 11 p
-
-instance Semigroup (NodeEvent a) where
-  l <> _ = l
-
-data FocusedNode a where
-  FocusedNode :: KnownNodeType b => Path a b -> Hash b -> Node b -> FocusedNode a
-deriving instance Show (FocusedNode a)
-
-data RenderNodeInfo t a
-  = RenderNodeInfo
-  { _rniHovered :: Bool
-  , _rniFocusNode :: Maybe (FocusedNode a)
-  , _rniFocusElement :: Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)
-  }
-makeLenses ''RenderNodeInfo
-instance Reflex t => Semigroup (RenderNodeInfo t a) where
-  rni1 <> rni2 =
-    RenderNodeInfo
-    { _rniHovered = (||) (_rniHovered rni1) (_rniHovered rni2)
-    , _rniFocusNode = (<|>) (rni1 ^. rniFocusNode) (rni2 ^. rniFocusNode)
-    , _rniFocusElement = (<|>) (rni1 ^. rniFocusElement) (rni2 ^. rniFocusElement)
-    }
-instance Reflex t => Monoid (RenderNodeInfo t a) where
-  mempty =
-    RenderNodeInfo
-    { _rniHovered = False
-    , _rniFocusNode = Nothing
-    , _rniFocusElement = Nothing
-    }
-
-data RenderNodeEnv t a b
-  = RenderNodeEnv
-  { _rnContextMenuControls :: ContextMenuControls t
-  , _rnNodeControls :: NodeControls t
-  , _rnMenu :: Dynamic t Menu
-  , _rnInitialErrors :: Trie b CheckError
-  , _rnErrors :: Dynamic t (Trie b CheckError)
-  , _rnInitialVersioned :: Versioned a
-  , _rnVersioned :: Dynamic t (Versioned a)
-  , _rnFocus :: Dynamic t (Focus b)
-  , _rnPath :: Path a b
-  }
-makeClassy ''RenderNodeEnv
-
-scribeDyn ::
-  forall time s m t a b.
-  (Reflex time, DynamicWriter time t m, Monoid s) =>
-  ASetter s t a b ->
-  Dynamic time b ->
-  m ()
-scribeDyn l dB =
-  tellDyn $ (\b -> mempty & l .~ b) <$> dB
-
-renderNodeHash ::
-  forall t m a b r.
-  ( MonadHold t m, DomBuilder t m, PostBuild t m
-  , PerformEvent t m, MonadJSM (Performable m)
-  , DomBuilderSpace m ~ GhcjsDomSpace
-  , TriggerEvent t m
-  , MonadFix m, MonadJSM m
-  , KnownNodeType b
-
-  , HasRenderNodeEnv r t a b
-  , MonadReader r m
-
-  , DynamicWriter t (RenderNodeInfo t a) m
-  , EventWriter t (NodeEvent a) m
-
-  , Show a
-  ) =>
-  Hash b ->
-  Dynamic t (Hash b) ->
-  m ()
-renderNodeHash initialHash dHash = do
-  initialVersioned <- view rnInitialVersioned
-  dVersioned <- view rnVersioned
-  let
-    getNode h versioned =
-      let
-        Identity (mNode, _) = runVersionedT versioned $ Store.lookupNode h
-      in
-        (,) h <$> mNode
-  renderMaybeNode
-    (getNode initialHash initialVersioned)
-    (traceDyn "node" $ getNode <$> dHash <*> dVersioned)
+downFocus ::
+  (forall x. Level b x -> Maybe (x :~: c)) ->
+  Focus b ->
+  Focus c
+downFocus match =
+  \case
+    NoFocus -> NoFocus
+    Focus p ->
+      case p of
+        Nil -> NoFocus
+        Cons l p' ->
+          case match l of
+            Nothing -> NoFocus
+            Just Refl -> Focus p'
 
 down ::
-  ( Monad m
-  , Reflex t
-  , HasRenderNodeEnv r t a b
-  , MonadReader r m
-  ) =>
-  (forall x y. Level x y -> Maybe (x :~: b, y :~: b')) ->
-  Level b b' ->
-  ReaderT (RenderNodeEnv t a b') m res ->
-  m res
-down match build m = do
-  let downErrors = Maybe.fromMaybe Trie.empty . Trie.down build
+  forall t m a b c.
+  (Reflex t, MonadReader (RenderNodeEnv t a b) m) =>
+  Level b c ->
+  (forall x. Level b x -> Maybe (x :~: c)) ->
+  forall x.
+  ReaderT (RenderNodeEnv t a c) m x ->
+  m x
+down level match m = do
   env <- ask
-  runReaderT m $
-    RenderNodeEnv
-    { _rnContextMenuControls = env ^. rnContextMenuControls
-    , _rnNodeControls = env ^. rnNodeControls
-    , _rnMenu = env ^. rnMenu
-    , _rnInitialErrors = downErrors $ view rnInitialErrors env
-    , _rnErrors = downErrors <$> view rnErrors env
-    , _rnInitialVersioned = env ^. rnInitialVersioned
-    , _rnVersioned = env ^. rnVersioned
-    , _rnFocus =
-      view rnFocus env <&>
-      \case
-        Focus (Cons level focusPath) | Just (Refl, Refl) <- match level ->
-          Focus focusPath
-        _ ->
-          NoFocus
-    , _rnPath = Path.snoc (view rnPath env) build
+  let
+    env' :: RenderNodeEnv t a c
+    env' =
+      RenderNodeEnv
+      { _rnVersioned = env ^. rnVersioned
+      , _rnVersionedChanged = env ^. rnVersionedChanged
+      , _rnFocus = downFocus match (env ^. rnFocus)
+      , _rnFocusChanged = fmap (downFocus match) (env ^. rnFocusChanged)
+      , _rnPath = Path.snoc (env ^. rnPath) level
+      , _rnHashChanged =
+          attachWithMaybe
+            (\versioned h ->
+               let
+                 Identity (mH, _) = runVersionedT versioned $ do
+                   mNode <- Store.lookupNode h
+                   case mNode of
+                     Nothing -> pure Nothing
+                     Just node ->
+                       case Path.downLevelNode level node of
+                         Nothing -> pure Nothing
+                         Just (h', _) -> pure $ Just h'
+               in
+                 mH
+            )
+            (env ^. rnVersioned)
+            (env ^. rnHashChanged)
+      , _rnNodeControls = env ^. rnNodeControls
+      }
+  runReaderT m env'
+
+instance Reflex t => Semigroup (ChildInfo t) where
+  c1 <> c2 =
+    ChildInfo
+    { _ciAnyMouseOver = (||) <$> _ciAnyMouseOver c1 <*> _ciAnyMouseOver c2
+    , _ciFocusElement = _ciFocusElement c1 <|> _ciFocusElement c2
     }
 
-errorUnderline ::
-  ( MonadHold t m
+instance Reflex t => Monoid (ChildInfo t) where
+  mempty =
+    ChildInfo
+    { _ciAnyMouseOver = constDyn False
+    , _ciFocusElement = Nothing
+    }
+
+renderNode ::
+  ( MonadHold t m, Adjustable t m
   , DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
-  , PostBuild t m
-  , TriggerEvent t m
-  , PerformEvent t m, MonadJSM (Performable m)
-  , MonadJSM m
-  ) =>
-  Bool ->
-  Event t Bool ->
-  m a ->
-  m ()
-errorUnderline initialHasError eHasErrorUpdated m =
-  networkHold_ (drawWhenHasError initialHasError) (drawWhenHasError <$> eHasErrorUpdated)
-  where
-    drawWhenHasError hasError =
-      if hasError
-      then do
-        (element, _) <- Dom.elAttr' "span" [("class", "error-target")] m
-        eAfterPostBuild <- delay 0.05 =<< getPostBuild
-        networkHold_ (drawUnderline element) (drawUnderline element <$ eAfterPostBuild)
-      else do
-        _ <- m
-        pure ()
-
-    drawUnderline element = do
-      rawElement :: HTMLElement <- GHCJS.DOM.unsafeCastTo HTMLElement (Dom._element_raw element)
-      x <- ceiling <$> HTMLElement.getOffsetLeft rawElement
-      y <- ceiling <$> HTMLElement.getOffsetTop rawElement
-      width <- ceiling <$> HTMLElement.getOffsetWidth rawElement
-      height <- ceiling <$> HTMLElement.getOffsetHeight rawElement
-      svgUnderline (x, y + height) width
-
-renderMaybeNode ::
-  forall t m a b r.
-  ( MonadHold t m, DomBuilder t m, PostBuild t m
-  , PerformEvent t m, MonadJSM (Performable m)
-  , DomBuilderSpace m ~ GhcjsDomSpace
-  , TriggerEvent t m
-  , MonadFix m, MonadJSM m
-  , KnownNodeType b
-
-  , HasRenderNodeEnv r t a b
-  , MonadReader r m
-
-  , DynamicWriter t (RenderNodeInfo t a) m
+  , MonadReader (RenderNodeEnv t a b) m
   , EventWriter t (NodeEvent a) m
-
-  , Show a
-  ) =>
-  Maybe (Hash b, Node b) ->
-  Dynamic t (Maybe (Hash b, Node b)) ->
-  m ()
-renderMaybeNode initialmNode dmNode = do
-  initialErrors <- view rnInitialErrors
-  dErrors <- view rnErrors
-  let
-    mkHasError = maybe False (const True) . Trie.current
-    initialHasError = mkHasError initialErrors
-    eHasErrorUpdated = mkHasError <$> updated dErrors
-
-  dHasError <- holdUniqDyn $ mkHasError <$> dErrors
-
-  dInFocus <-
-    holdUniqDyn =<<
-    views rnFocus (fmap (\case; Focus Nil -> True; _ -> False))
-
-  rec
-    let
-      dAttrs =
-        (\mNode hovered hasError inFocus ->
-            (if Maybe.maybe False isHole (snd <$> mNode)
-              then "class" =: "syntax-hole"
-              else mempty
-            ) <>
-            (case nodeType @b of
-              TExpr -> "class" =: "syntax-expr"
-              TBlock -> "class" =: "syntax-block"
-              TStatement -> "class" =: "syntax-statement"
-              TIdent -> "class" =: "syntax-ident"
-              TArgs -> "class" =: "syntax-args"
-              TParams -> "class" =: "syntax-params"
-              TExprs -> "class" =: "syntax-exprs"
-            ) <>
-            (if hovered then "class" =: "syntax-hovered" else mempty) <>
-            (if hasError then "class" =: "has-error" else mempty) <>
-            (if inFocus then "class" =: "syntax-focused" else mempty)
-        ) <$>
-        dmNode <*>
-        dElementHovered <*>
-        dHasError <*>
-        dInFocus
-
-    let
-      rendermNodeFactored ::
-        Maybe ((Hash b, Node b), Dynamic t (Hash b, Node b)) ->
-        m (Dynamic t Bool, Dom.Element Dom.EventResult GhcjsDomSpace t)
-      rendermNodeFactored mdNode = do
-        (element, dRenderNodeInfo) <-
-          runDynamicWriterT . fmap fst . syntaxNodeD' dAttrs . errorUnderline initialHasError eHasErrorUpdated $
-          case mdNode of
-            Nothing ->
-              Dom.text "error: missing node"
-            Just (initialNode, dNode) -> do
-              path <- view rnPath
-              scribeDyn @t @(RenderNodeInfo t a) rniFocusNode $
-                (\inFocus (hash, node) ->
-                  if inFocus
-                  then Just $ FocusedNode path hash node
-                  else Nothing
-                ) <$>
-                dInFocus <*>
-                dNode
-
-              (initialNodeD, dNodeD) <- nodeDyn (snd initialNode) (snd <$> traceEvent "eNode" (updated dNode))
-
-              networkHold_ (renderNodeD initialNodeD) (renderNodeD <$> traceEventWith (\case; NDefD{} -> "yes"; _ -> "no") (updated dNodeD))
-        let
-          eMouseenter = Dom.domEvent Dom.Mouseenter element
-          eMouseleave = Dom.domEvent Dom.Mouseleave element
-          eMousedown = Dom.domEvent Dom.Mousedown element
-
-        dMouseInside <-
-          case nodeType @b of
-            TBlock ->
-              pure $ view rniHovered <$> dRenderNodeInfo
-            _ ->
-              holdDyn False $ leftmost [True <$ eMouseenter, False <$ eMouseleave]
-
-        dHovered <-
-          case nodeType @b of
-            TBlock -> pure $ constDyn False
-            _ ->
-              holdUniqDyn $
-              (\inFocus inside childInfo ->
-                inside && not (childInfo ^. rniHovered) && not inFocus
-              ) <$>
-              dInFocus <*>
-              dMouseInside <*>
-              dRenderNodeInfo
-
-        let eClicked = gate (current dHovered) eMousedown
-
-        dMenu <- view rnMenu
-        controls <- view rnNodeControls
-        path <- view rnPath
-        let
-          eOpenMenu =
-            attachWithMaybe
-              (\(inFocus, menu) () -> if inFocus && menu == MenuClosed then Just OpenMenu else Nothing)
-              ((,) <$> current dInFocus <*> current dMenu)
-              (ncOpenMenu controls)
-
-          eCloseMenu =
-            attachWithMaybe
-              (\menu () -> if menu == MenuOpen then Just CloseMenu else Nothing)
-              (current dMenu)
-              (ncCloseMenu controls)
-
-          eSelect =
-            Select path <$ eClicked
-
-        tellDyn dRenderNodeInfo
-
-        -- why do I get an overlapping instance error without the type applications?
-        scribeDyn @t @(RenderNodeInfo t a) rniHovered dMouseInside
-        scribeDyn @t @(RenderNodeInfo t a) rniFocusElement $
-          (\inFocus -> if inFocus then Just element else Nothing) <$>
-          dInFocus
-
-        tellEvent eOpenMenu
-        tellEvent eCloseMenu
-        tellEvent eSelect
-
-        pure (dHovered, element)
-
-    (initialmNodeFactored, dmNodeFactored) <- maybeDyn initialmNode dmNode
-    (dElementHovered :: Dynamic t Bool, _dElement) <-
-      fmap (\d -> (d >>= fst, snd <$> d)) $
-      Reflex.Network.networkHold
-        (rendermNodeFactored initialmNodeFactored)
-        (rendermNodeFactored <$> updated dmNodeFactored)
-  pure ()
-
-renderNodeD ::
-  forall t m r a b.
-  ( DomBuilder t m, DomBuilderSpace m ~ GhcjsDomSpace
-  , MonadHold t m
-  , PerformEvent t m, MonadJSM (Performable m)
-  , TriggerEvent t m
-  , Adjustable t m
-  , NotReady t m
+  , DynamicWriter t (ChildInfo t) m
   , PostBuild t m
-  , HasRenderNodeEnv r t a b
-  , MonadReader r m
   , MonadFix m
-  , MonadJSM m
-  , DynamicWriter t (RenderNodeInfo t a) m
-  , EventWriter t (NodeEvent a) m
-
-  , Show a
   ) =>
-  NodeD t b ->
+  Versioned a ->
+  Node b ->
   m ()
-renderNodeD node =
+renderNode versioned node =
   case node of
-    NEIdentD n ->
-      Dom.dyn_ $ Dom.text . Text.pack <$> n
-    NIdentD n ->
-      Dom.dyn_ $ Dom.text . Text.pack <$> n
-    NIHoleD ->
+    NEIdent n ->
+      Dom.text $ Text.pack n
+    NIdent n ->
+      Dom.text $ Text.pack n
+    NIHole ->
       syntaxHole mempty
-    NForD initialIdent initialVal initialBody ident val body -> do
+    NFor ident val body -> do
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "for"
         down
-          (\case; For_Ident -> Just (Refl, Refl); _ -> Nothing)
           For_Ident
-          (renderNodeHash initialIdent ident)
+          (\case; For_Ident -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned ident)
         syntaxKeyword mempty $ Dom.text "in"
         down
-          (\case; For_Expr -> Just (Refl, Refl); _ -> Nothing)
           For_Expr
-          (renderNodeHash initialVal val)
+          (\case; For_Expr -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned val)
         syntaxColon mempty
       syntaxNested mempty $
         down
-          (\case; For_Block -> Just (Refl, Refl); _ -> Nothing)
           For_Block
-          (renderNodeHash initialBody body)
-    NIfThenD initialCond initialThen cond then_ -> do
+          (\case; For_Block -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned body)
+    NIfThen cond then_ -> do
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "if"
         down
-          (\case; IfThen_Cond -> Just (Refl, Refl); _ -> Nothing)
           IfThen_Cond
-          (renderNodeHash initialCond cond)
+          (\case; IfThen_Cond -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned cond)
         syntaxColon mempty
       syntaxNested mempty $
         down
-          (\case; IfThen_Then -> Just (Refl, Refl); _ -> Nothing)
           IfThen_Then
-          (renderNodeHash initialThen then_)
-    NIfThenElseD initialCond initialThen initialElse cond then_ else_ -> do
+          (\case; IfThen_Then -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned then_)
+    NIfThenElse cond then_ else_ -> do
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "if"
         down
-          (\case; IfThenElse_Cond -> Just (Refl, Refl); _ -> Nothing)
           IfThenElse_Cond
-          (renderNodeHash initialCond cond)
+          (\case; IfThenElse_Cond -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned cond)
         syntaxColon mempty
       syntaxNested mempty $
         down
-          (\case; IfThenElse_Then -> Just (Refl, Refl); _ -> Nothing)
           IfThenElse_Then
-          (renderNodeHash initialThen then_)
+          (\case; IfThenElse_Then -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned then_)
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "else"
         syntaxColon mempty
       syntaxNested mempty $
         down
-          (\case; IfThenElse_Else -> Just (Refl, Refl); _ -> Nothing)
           IfThenElse_Else
-          (renderNodeHash initialElse else_)
-    NPrintD initialVal val ->
+          (\case; IfThenElse_Else -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned else_)
+    NPrint val ->
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "print"
         syntaxColon mempty
         down
-          (\case; Print_Value -> Just (Refl, Refl); _ -> Nothing)
           Print_Value
-          (renderNodeHash initialVal val)
-    NReturnD initialVal val ->
+          (\case; Print_Value -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned val)
+    NReturn val ->
       syntaxLine mempty $ do
         syntaxKeyword mempty $ Dom.text "return"
         syntaxColon mempty
         down
-          (\case; Return_Value -> Just (Refl, Refl); _ -> Nothing)
           Return_Value
-          (renderNodeHash initialVal val)
-    NDefD initialName initialArgs initialBody name args body -> do
+          (\case; Return_Value -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned val)
+    NDef name args body -> do
       syntaxLine mempty $ do
-        liftIO $ putStrLn "test"
         syntaxKeyword mempty $ Dom.text "def"
         down
-          (\case; Def_Name -> Just (Refl, Refl); _ -> Nothing)
           Def_Name
-          (renderNodeHash initialName name)
+          (\case; Def_Name -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned name)
         syntaxLParen mempty
         down
-          (\case; Def_Args -> Just (Refl, Refl); _ -> Nothing)
           Def_Args
-          (renderNodeHash initialArgs args)
+          (\case; Def_Args -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned args)
         syntaxRParen mempty
         syntaxColon mempty
       syntaxNested mempty $
         down
-          (\case; Def_Body -> Just (Refl, Refl); _ -> Nothing)
           Def_Body
-          (renderNodeHash initialBody body)
-    NBoolD initialB dB ->
-      let
-        render b = syntaxLiteral mempty . Dom.text $ if b then "true" else "false"
-      in
-        networkHold_ (render initialB) (render <$> updated dB)
-    NIntD initialN n ->
-      let
-        render = syntaxLiteral mempty . Dom.text . Text.pack . show
-      in
-        networkHold_ (render initialN) (render <$> updated n)
-    NBinOpD initialOp initialLeft initialRight dOp left right ->
-      let
-        renderOp =
-          \case
-            Add -> syntaxSymbol mempty $ Dom.text "+"
-            Sub -> syntaxSymbol mempty $ Dom.text "-"
-            Mul -> syntaxSymbol mempty $ Dom.text "*"
-            Div -> syntaxSymbol mempty $ Dom.text "/"
-            Eq -> syntaxSymbol mempty $ Dom.text "=="
-            And -> syntaxKeyword mempty $ Dom.text "and"
-            Or -> syntaxKeyword mempty $ Dom.text "or"
-      in
-        syntaxInline mempty $ do
-          down
-            (\case; BinOp_Left -> Just (Refl, Refl); _ -> Nothing)
-            BinOp_Left
-            (renderNodeHash initialLeft left)
-          networkHold_ (renderOp initialOp) (renderOp <$> updated dOp)
-          down
-            (\case; BinOp_Right -> Just (Refl, Refl); _ -> Nothing)
-            BinOp_Right
-            (renderNodeHash initialRight right)
-    NUnOpD initialOp initialVal dOp val ->
-      let
-        renderOp =
-          \case
-            Neg -> syntaxSymbol mempty $ Dom.text "-"
-            Not -> syntaxKeyword mempty $ Dom.text "not"
-      in
-        syntaxInline mempty $ do
-          networkHold_ (renderOp initialOp) (renderOp <$> updated dOp)
-          down
-            (\case; UnOp_Value -> Just (Refl, Refl); _ -> Nothing)
-            UnOp_Value
-            (renderNodeHash initialVal val)
-    NCallD initialFunc initialArgs func args ->
+          (\case; Def_Body -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned body)
+    NBool b ->
+      syntaxLiteral mempty . Dom.text $ if b then "true" else "false"
+    NInt n ->
+      syntaxLiteral mempty . Dom.text $ Text.pack (show n)
+    NBinOp op left right ->
       syntaxInline mempty $ do
         down
-          (\case; Call_Function -> Just (Refl, Refl); _ -> Nothing)
+          BinOp_Left
+          (\case; BinOp_Left -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned left)
+        case op of
+          Add -> syntaxSymbol mempty $ Dom.text "+"
+          Sub -> syntaxSymbol mempty $ Dom.text "-"
+          Mul -> syntaxSymbol mempty $ Dom.text "*"
+          Div -> syntaxSymbol mempty $ Dom.text "/"
+          Eq -> syntaxSymbol mempty $ Dom.text "=="
+          And -> syntaxKeyword mempty $ Dom.text "and"
+          Or -> syntaxKeyword mempty $ Dom.text "or"
+        down
+          BinOp_Right
+          (\case; BinOp_Right -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned right)
+    NUnOp op val ->
+      syntaxInline mempty $ do
+        case op of
+          Neg -> syntaxSymbol mempty $ Dom.text "-"
+          Not -> syntaxKeyword mempty $ Dom.text "not"
+        down
+          UnOp_Value
+          (\case; UnOp_Value -> Just Refl; _ -> Nothing)
+            (renderNodeHash versioned val)
+    NCall func args ->
+      syntaxInline mempty $ do
+        down
           Call_Function
-          (renderNodeHash initialFunc func)
+          (\case; Call_Function -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned func)
         syntaxLParen mempty
         down
-          (\case; Call_Args -> Just (Refl, Refl); _ -> Nothing)
           Call_Args
-          (renderNodeHash initialArgs args)
+          (\case; Call_Args -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned args)
         syntaxRParen mempty
-    NListD initialExprs exprs -> do
+    NList exprs -> do
       syntaxInline mempty $ do
         syntaxLBracket mempty
         down
-          (\case; List_Exprs -> Just (Refl, Refl); _ -> Nothing)
           List_Exprs
-          (renderNodeHash initialExprs exprs)
+          (\case; List_Exprs -> Just Refl; _ -> Nothing)
+          (renderNodeHash versioned exprs)
         syntaxRBracket mempty
-    NExprsD initialXs xs ->
-      let
-        render =
-          itraverse_
-             (\ix (initialX, x) ->
-               down
-                 (\case; Exprs_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                 (Exprs_Index ix)
-                 (renderNodeHash initialX x)
-             )
-      in
-        syntaxInline mempty $ do
-          (initialldX, dldX) <- listDyn initialXs xs
-          networkHold_ (render $ initialldX) (render <$> updated dldX)
-    NBlockD initialSts sts -> do
-      let
-        render =
-          itraverse_
-            (\ix (initialX, x) ->
-               down
-                 (\case; Block_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                 (Block_Index ix)
-                 (renderNodeHash initialX x)
-            )
-      (initialldSt, dldSt) <- listDyn (NonEmpty.toList initialSts) (NonEmpty.toList <$> sts)
-      networkHold_ (render $ initialldSt) (render <$> updated dldSt)
-    NArgsD initialXs xs -> do
-      let
-        render =
-          traverse_
-            (\item ->
-              case item of
-                Nothing ->
-                  syntaxComma mempty
-                Just (ix, (initialX, x)) ->
-                  down
-                    (\case; Args_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                    (Args_Index ix)
-                    (renderNodeHash initialX x)
-            ) .
-            List.intersperse Nothing . fmap Just . zip [0::Int ..]
+    NExprs xs ->
+      syntaxInline mempty $
+      itraverse_
+        (\ix x ->
+          down
+            (Exprs_Index ix)
+            (\case; Exprs_Index ix' | ix == ix' -> Just Refl; _ -> Nothing)
+            (renderNodeHash versioned x)
+        )
+        xs
+    NBlock sts -> do
+      itraverse_
+        (\ix x ->
+            down
+              (Block_Index ix)
+              (\case; Block_Index ix' | ix == ix' -> Just Refl; _ -> Nothing)
+              (renderNodeHash versioned x)
+        )
+        sts
+    NArgs xs -> do
       syntaxInline mempty $ do
-        (initialldX, dldX) <- listDyn initialXs xs
-        networkHold_ (render $ initialldX) (render <$> updated dldX)
-    NParamsD initialXs xs -> do
-      let
-        render =
-          traverse_
-            (\item ->
-              case item of
-                Nothing ->
-                  syntaxComma mempty
-                Just (ix, (initialX, x)) ->
-                  down
-                    (\case; Params_Index ix' | ix == ix' -> Just (Refl, Refl); _ -> Nothing)
-                    (Params_Index ix)
-                    (renderNodeHash initialX x)
-            ) .
-            List.intersperse Nothing . fmap Just . zip [0::Int ..]
+        traverse_
+          (\item ->
+            case item of
+              Nothing ->
+                syntaxComma mempty
+              Just (ix, x) ->
+                down
+                  (Args_Index ix)
+                  (\case; Args_Index ix' | ix == ix' -> Just Refl; _ -> Nothing)
+                  (renderNodeHash versioned x)
+          ) .
+          List.intersperse Nothing . fmap Just . zip [0::Int ..] $
+          xs
+    NParams xs -> do
       syntaxInline mempty $ do
-        (initialldX, dldX) <- listDyn initialXs xs
-        networkHold_ (render $ initialldX) (render <$> updated dldX)
-    NSHoleD ->
+        traverse_
+          (\item ->
+            case item of
+              Nothing ->
+                syntaxComma mempty
+              Just (ix, x) ->
+                down
+                  (Params_Index ix)
+                  (\case; Params_Index ix' | ix == ix' -> Just Refl; _ -> Nothing)
+                  (renderNodeHash versioned x)
+          ) .
+          List.intersperse Nothing . fmap Just . zip [0::Int ..] $
+          xs
+    NSHole ->
       syntaxHole mempty
-    NEHoleD ->
+    NEHole ->
       syntaxHole mempty

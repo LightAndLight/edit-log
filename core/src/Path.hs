@@ -601,6 +601,9 @@ unsnoc path =
         UnsnocMore prefix final ->
           UnsnocMore (Cons l prefix) final
 
+instance GEq (Path a) where
+  geq = eqPath
+
 eqPath :: Path a b -> Path a c -> Maybe (b :~: c)
 eqPath p1 p2 =
   case p1 of
@@ -614,6 +617,23 @@ eqPath p1 p2 =
         Cons l' p2' -> do
           Refl <- eqLevel l l'
           eqPath p1' p2'
+
+instance GCompare (Path a) where
+  gcompare Nil Nil = GEQ
+  gcompare Nil _ = GLT
+  gcompare _ Nil = GGT
+
+  gcompare (Cons l ls) (Cons l' ls') =
+    case gcompare l l' of
+      GEQ ->
+        case gcompare ls ls' of
+          GEQ -> GEQ
+          GLT -> GLT
+          GGT -> GGT
+      GLT -> GLT
+      GGT -> GGT
+  gcompare Cons{} _ = GLT
+  gcompare _ Cons{} = GGT
 
 traversal :: Path a b -> forall f. Applicative f => (b -> f b) -> a -> f a
 traversal p f a =
