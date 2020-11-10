@@ -58,6 +58,7 @@ import Syntax
 import Session (Session, newSession)
 import qualified Session
 import Session.Pure (runSessionT)
+import qualified Store
 import qualified Versioned
 import Versioned.Pure (Versioned, runVersionedT, newVersioned)
 
@@ -65,7 +66,7 @@ import BottomPanel (renderBottomPanel, bpNextError, bpPrevError, bpSetFocus)
 import ContextMenu (ContextMenuControls(..), ContextMenuEvent(..), Menu(..), renderContextMenu)
 import Focus (Focus(..))
 import qualified Navigation
-import Render (NodeControls(..), NodeEvent(..), RenderNodeEnv(..), ChildInfo(..), renderNodeHash)
+import Render (NodeControls(..), NodeEvent(..), RenderNodeEnv(..), ChildInfo(..), Located(..), renderNodeHash)
 import Svg (svgEl, svgElAttr)
 
 data DocumentKeys t
@@ -424,7 +425,7 @@ renderEditor keys _editorControls initial initialFocus =
           )
 
       let
-        eStep :: Event t (Maybe (Hash a), Maybe (Focus a), Maybe (Versioned a))
+        eStep :: Event t (Maybe (Located a Hash), Maybe (Focus a), Maybe (Versioned a))
         eStep =
           attachWithMaybe
             (\old event ->
@@ -433,14 +434,15 @@ renderEditor keys _editorControls initial initialFocus =
                    case contextMenuEvent of
                      Choose path val ->
                        let
-                         Identity (newRoot, new) =
+                         Identity (hash, new) =
                            runVersionedT old $ do
-                             _ <- Versioned.replace path val
-                             Versioned.getRoot
+                             h <- Store.addKnownNode val
+                             _ <- Versioned.replaceH path h
+                             pure h
 
                          mFocus = Navigation.nextHole new path
                        in
-                         Just (Just newRoot, mFocus, Just new)
+                         Just (Just (Located path hash), mFocus, Just new)
                      _ -> Nothing
                  Right nodeEvent ->
                    case nodeEvent of
@@ -455,6 +457,7 @@ renderEditor keys _editorControls initial initialFocus =
           (fmapMaybe (view _1) eStep, fmapMaybe (view _2) eStep, fmapMaybe (view _3) eStep)
 
       bVersioned <- hold initialVersioned eVersionUpdated
+      dFocus <- holdDyn initialFocus eFocusChanged
 
       let
         renderNodeEnv =
@@ -462,8 +465,7 @@ renderEditor keys _editorControls initial initialFocus =
           { _rnVersioned = bVersioned
           , _rnVersionedChanged = eVersionUpdated
           , _rnPath = Nil
-          , _rnFocus = initialFocus
-          , _rnFocusChanged = eFocusChanged
+          , _rnFocus = dFocus
           , _rnHashChanged = eHashChanged
           , _rnNodeControls = nodeControls
           }
@@ -472,7 +474,6 @@ renderEditor keys _editorControls initial initialFocus =
         runDynamicWriterT . runEventWriterT $
         runReaderT (renderNodeHash initialVersioned initialRootHash) renderNodeEnv
 
-      dFocus <- holdDyn initialFocus eFocusChanged
       let dFocusElement = _ciFocusElement <$> dChildInfo
       eContextMenu :: Event t (ContextMenuEvent a) <-
         renderContextMenu

@@ -13,14 +13,14 @@ module Render
   ( NodeControls(..), NodeEvent(..)
   , RenderNodeEnv(..)
   , ChildInfo(..)
+  , Located(..)
   , renderNodeHash
   )
 where
 
 import Control.Applicative ((<|>))
-import Control.Lens.Getter ((^.), view)
+import Control.Lens.Getter ((^.), view, views)
 import Control.Lens.Indexed (itraverse_)
-import Control.Lens.Setter (locally)
 import Control.Lens.TH (makeLenses)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, ask)
@@ -99,14 +99,16 @@ instance GCompare (Change a b) where
   gcompare NewFocus _ = GLT
   gcompare _ NewFocus = GGT
 
+data Located a f where
+  Located :: Path a b -> f b -> Located a f
+
 data RenderNodeEnv t a b
   = RenderNodeEnv
   { _rnVersioned :: Behavior t (Versioned a)
   , _rnVersionedChanged :: Event t (Versioned a)
   , _rnPath :: Path a b
-  , _rnFocus :: Focus b
-  , _rnFocusChanged :: Event t (Focus b)
-  , _rnHashChanged :: Event t (Hash b)
+  , _rnFocus :: Dynamic t (Focus b)
+  , _rnHashChanged :: Event t (Located b Hash)
   , _rnNodeControls :: NodeControls t
   }
 makeLenses ''RenderNodeEnv
@@ -134,40 +136,39 @@ renderNodeHash ::
 renderNodeHash versioned hash = do
   rec
     eHash <-
-      attachWithMaybe (\old new -> if old == new then Nothing else Just new) bHash <$>
+      attachWithMaybe
+        (\old located ->
+           case located of
+             Located Nil new | old /= new ->
+               Just new
+             _ ->
+               Nothing
+        )
+        bHash <$>
       view rnHashChanged
     bHash <- hold hash eHash
 
   eVersioned <- view rnVersionedChanged
   bVersioned <- view rnVersioned
 
-  focus <- view rnFocus
-  eFocus <- view rnFocusChanged
-  bFocus <- hold focus eFocus
-
   Dom.widgetHold_
     (renderMaybeNode versioned $ getNode versioned hash)
     (attachWithMaybe
-       (\(v, f, h) change -> do
-          (v', f', h') <-
-            case (DMap.lookup NewVersioned change, DMap.lookup NewFocus change, DMap.lookup NewHash change) of
-              (Nothing, Nothing, Nothing) -> Nothing
-              (Just (Identity v'), Nothing, Nothing) -> pure (v', f, h)
-              (Nothing, Just (Identity f'), Nothing) -> pure (v, f', h)
-              (Nothing, Nothing, Just (Identity h')) -> pure (v, f, h')
-              (Just (Identity v'), Nothing, Just (Identity h')) -> pure (v', f, h')
-              (Just (Identity v'), Just (Identity f'), Nothing) -> pure (v', f', h)
-              (Nothing, Just (Identity f'), Just (Identity h')) -> pure (v, f', h')
-              (Just (Identity v'), Just (Identity f'), Just (Identity h')) -> pure (v', f', h')
-          pure $
-            locally rnFocus (const f') $
-            renderMaybeNode v' (getNode v' h')
+       (\v change -> do
+          (v', h') <-
+            case (DMap.lookup NewVersioned change, DMap.lookup NewHash change) of
+              (_, Nothing) ->
+                Nothing
+              (Nothing, Just (Identity h)) ->
+                pure (v, h)
+              (Just (Identity v'), Just (Identity h)) ->
+                pure (v', h)
+          pure $ renderMaybeNode v' (getNode v' h')
        )
-       ((,,) <$> bVersioned <*> bFocus <*> bHash)
+       bVersioned
        (mergeWith (<>)
          [ DMap.singleton NewVersioned . pure <$> eVersioned
          , DMap.singleton NewHash . pure <$> eHash
-         , DMap.singleton NewFocus . pure <$> eFocus
          ]
        )
     )
@@ -241,10 +242,7 @@ renderMaybeNode versioned mNode =
           (if hovered && not focused then "class" =: "syntax-hovered" else mempty)
 
       let isFocused = \case; Focus Nil -> True; _ -> False
-      focus <- view rnFocus
-      dFocused <- do
-        eFocusChanged <- view rnFocusChanged
-        holdDyn (isFocused focus) (isFocused <$> eFocusChanged)
+      dFocused <- views rnFocus $ fmap isFocused
 
       rec
         let
@@ -365,25 +363,17 @@ down level match m = do
       RenderNodeEnv
       { _rnVersioned = env ^. rnVersioned
       , _rnVersionedChanged = env ^. rnVersionedChanged
-      , _rnFocus = downFocus match (env ^. rnFocus)
-      , _rnFocusChanged = fmap (downFocus match) (env ^. rnFocusChanged)
+      , _rnFocus = fmap (downFocus match) (env ^. rnFocus)
       , _rnPath = Path.snoc (env ^. rnPath) level
       , _rnHashChanged =
-          attachWithMaybe
-            (\versioned h ->
-               let
-                 Identity (mH, _) = runVersionedT versioned $ do
-                   mNode <- Store.lookupNode h
-                   case mNode of
-                     Nothing -> pure Nothing
-                     Just node ->
-                       case Path.downLevelNode level node of
-                         Nothing -> pure Nothing
-                         Just (h', _) -> pure $ Just h'
-               in
-                 mH
+          fmapMaybe
+            (\(Located p h) ->
+               case p of
+                 Nil -> Nothing
+                 Cons l p' -> do
+                   Refl <- match l
+                   pure $ Located p' h
             )
-            (env ^. rnVersioned)
             (env ^. rnHashChanged)
       , _rnNodeControls = env ^. rnNodeControls
       }
@@ -562,15 +552,20 @@ renderNode versioned node =
           (renderNodeHash versioned exprs)
         syntaxRBracket mempty
     NExprs xs ->
-      syntaxInline mempty $
-      itraverse_
-        (\ix x ->
-          down
-            (Exprs_Index ix)
-            (\case; Exprs_Index ix' | ix == ix' -> Just Refl; _ -> Nothing)
-            (renderNodeHash versioned x)
-        )
-        xs
+      syntaxInline mempty $ do
+        traverse_
+          (\item ->
+            case item of
+              Nothing ->
+                syntaxComma mempty
+              Just (ix, x) ->
+                down
+                  (Exprs_Index ix)
+                  (\case; Exprs_Index ix' | ix == ix' -> Just Refl; _ -> Nothing)
+                  (renderNodeHash versioned x)
+          ) .
+          List.intersperse Nothing . fmap Just . zip [0::Int ..] $
+          xs
     NBlock sts -> do
       itraverse_
         (\ix x ->
