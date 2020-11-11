@@ -404,7 +404,7 @@ renderEditor keys _editorControls initial initialFocus =
       let
         nodeControls =
           NodeControls
-          { _ncOpenMenu = gate ((== MenuClosed) <$> current dMenu) (dkSpace keys)
+          { _ncOpenMenu = gate ((== MenuClosed) <$> bMenu) (dkSpace keys)
           , _ncCloseMenu = dkEscape keys
           }
 
@@ -413,17 +413,17 @@ renderEditor keys _editorControls initial initialFocus =
         dErrors = constDyn Trie.empty
           -- mkErrors <$> dCheckResult
 
-      dMenu <-
-        holdDyn
-          MenuClosed
-          (fmapMaybe
+      let
+        initialMenu = MenuClosed
+        eMenu =
+          fmapMaybe
             (\case
               CloseMenu -> Just MenuClosed
               OpenMenu -> Just MenuOpen
               _ -> Nothing
             )
             eNode
-          )
+      bMenu <- hold initialMenu eMenu
 
       let
         eStep :: Event t (Maybe (Located a Hash), Maybe (Focus a), Maybe (Versioned a))
@@ -479,8 +479,8 @@ renderEditor keys _editorControls initial initialFocus =
       eContextMenu :: Event t (ContextMenuEvent a) <-
         renderContextMenu
           contextMenuControls
-          dMenu
-          dFocus
+          (initialMenu, initialFocus)
+          (eMenu, eFocusChanged)
           dFocusElement
 
     pure $ Editor { _eFocus = dFocus, _eErrors = dErrors }

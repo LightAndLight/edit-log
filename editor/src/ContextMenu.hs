@@ -3,6 +3,7 @@
 {-# language OverloadedStrings #-}
 {-# language RecursiveDo #-}
 {-# language ScopedTypeVariables, TypeApplications #-}
+{-# options_ghc -fno-warn-overlapping-patterns #-}
 module ContextMenu
   ( ContextMenuControls(..)
   , ContextMenuEvent(..)
@@ -11,12 +12,14 @@ module ContextMenu
   )
 where
 
-import Control.Monad (join)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Trans.Class (lift)
 import Data.Constraint.Extras (has)
+import qualified Data.Dependent.Map as DMap
 import Data.Foldable (for_)
 import Data.Functor (($>))
+import Data.Functor.Identity (runIdentity)
+import Data.GADT.Compare (GEq(..), GCompare(..), GOrdering(..), (:~:)(..))
 import qualified Data.List as List
 import qualified Data.Ord
 import Data.Text (Text)
@@ -267,6 +270,35 @@ contextMenuEntries controls path = do
               (cmcChoose controls)
           )
 
+data Changes t a x where
+  MenuChanged :: Changes t a Menu
+  FocusChanged :: Changes t a (Focus a)
+  FocusElementChanged :: Changes t a (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))
+instance GEq (Changes t a) where
+  geq MenuChanged MenuChanged = Just Refl
+  geq MenuChanged _ = Nothing
+  geq _ MenuChanged = Nothing
+
+  geq FocusChanged FocusChanged = Just Refl
+  geq FocusChanged _ = Nothing
+  geq _ FocusChanged = Nothing
+
+  geq FocusElementChanged FocusElementChanged = Just Refl
+  geq FocusElementChanged _ = Nothing
+  geq _ FocusElementChanged = Nothing
+instance GCompare (Changes t a) where
+  gcompare MenuChanged MenuChanged = GEQ
+  gcompare MenuChanged _ = GLT
+  gcompare _ MenuChanged = GGT
+
+  gcompare FocusChanged FocusChanged = GEQ
+  gcompare FocusChanged _ = GLT
+  gcompare _ FocusChanged = GGT
+
+  gcompare FocusElementChanged FocusElementChanged = GEQ
+  gcompare FocusElementChanged _ = GLT
+  gcompare _ FocusElementChanged = GGT
+
 renderContextMenu ::
   forall t m a.
   ( Reflex t, MonadHold t m
@@ -275,14 +307,39 @@ renderContextMenu ::
   , MonadJSM m, MonadFix m
   ) =>
   ContextMenuControls t ->
-  Dynamic t Menu ->
-  Dynamic t (Focus a) ->
+  (Menu, Focus a) ->
+  (Event t Menu, Event t (Focus a)) ->
   Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)) ->
   m (Event t (ContextMenuEvent a))
-renderContextMenu contextMenuControls dMenu dFocus dFocusElement = do
+renderContextMenu contextMenuControls (initialMenu, initialFocus) (eMenu, eFocus) dFocusElement = do
+  bMenu <- hold initialMenu eMenu
+  bFocus <- hold initialFocus eFocus
+
+  let
+    bFocusElement = current dFocusElement
+    eFocusElement = updated dFocusElement
+  initialFocusElement <- sample bFocusElement
+
   dMkMenu <- do
-    let dMkMenu_ = mkMenu <$> dMenu <*> dFocus <*> dFocusElement
-    Dom.widgetHold (join . sample $ current dMkMenu_) (updated dMkMenu_)
+    Dom.widgetHold
+      (mkMenu initialMenu initialFocus initialFocusElement)
+      ((\menu focus focusElement changes ->
+          let
+            menu' = maybe menu runIdentity (DMap.lookup MenuChanged changes)
+            focus' = maybe focus runIdentity (DMap.lookup FocusChanged changes)
+            focusElement' = maybe focusElement runIdentity (DMap.lookup FocusElementChanged changes)
+          in
+            mkMenu menu' focus' focusElement'
+       ) <$>
+       bMenu <*>
+       bFocus <*>
+       bFocusElement <@>
+       mergeWith (<>)
+         [ DMap.singleton MenuChanged . pure <$> eMenu
+         , DMap.singleton FocusChanged . pure <$> eFocus
+         , DMap.singleton FocusElementChanged . pure <$> eFocusElement
+         ]
+      )
 
   let
     eContextMenu = switchDyn dMkMenu
