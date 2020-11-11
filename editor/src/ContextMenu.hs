@@ -309,12 +309,9 @@ renderContextMenu ::
   ContextMenuControls t ->
   (Menu, Focus a) ->
   (Event t Menu, Event t (Focus a)) ->
-  Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t)) ->
+  (Behavior t Menu, Behavior t (Focus a), Dynamic t (Maybe (Dom.Element Dom.EventResult GhcjsDomSpace t))) ->
   m (Event t (ContextMenuEvent a))
-renderContextMenu contextMenuControls (initialMenu, initialFocus) (eMenu, eFocus) dFocusElement = do
-  bMenu <- hold initialMenu eMenu
-  bFocus <- hold initialFocus eFocus
-
+renderContextMenu contextMenuControls (initialMenu, initialFocus) (eMenu, eFocus) (bMenu, bFocus, dFocusElement) = do
   let
     bFocusElement = current dFocusElement
     eFocusElement = updated dFocusElement

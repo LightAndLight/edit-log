@@ -481,7 +481,7 @@ renderEditor keys _editorControls initial initialFocus =
           contextMenuControls
           (initialMenu, initialFocus)
           (eMenu, eFocusChanged)
-          dFocusElement
+          (bMenu, current dFocus, dFocusElement)
 
     pure $ Editor { _eFocus = dFocus, _eErrors = dErrors }
 
