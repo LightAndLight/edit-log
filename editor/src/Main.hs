@@ -388,12 +388,6 @@ renderEditor keys _editorControls initial initialFocus =
         , cmcPrev = leftmost [dkUp keys, dkShiftTab keys]
         }
 
-      nodeControls =
-        NodeControls
-        { _ncOpenMenu = dkSpace keys
-        , _ncCloseMenu = dkEscape keys
-        }
-
       initialVersioned :: Versioned a
       initialVersioned = newVersioned initial
 
@@ -407,6 +401,13 @@ renderEditor keys _editorControls initial initialFocus =
           rooth
 
     rec
+      let
+        nodeControls =
+          NodeControls
+          { _ncOpenMenu = gate ((== MenuClosed) <$> current dMenu) (dkSpace keys)
+          , _ncCloseMenu = dkEscape keys
+          }
+
       let
         dErrors :: Dynamic t (Trie a CheckError)
         dErrors = constDyn Trie.empty
