@@ -22,6 +22,7 @@ import Control.Applicative ((<|>))
 import Control.Lens.Getter ((^.), view, views)
 import Control.Lens.Indexed (itraverse_)
 import Control.Lens.TH (makeLenses)
+import Control.Monad (guard)
 import Control.Monad.Fix (MonadFix)
 import Control.Monad.Reader (MonadReader, ReaderT, runReaderT, ask)
 import qualified Data.Dependent.Map as DMap
@@ -104,8 +105,7 @@ data Located a f where
 
 data RenderNodeEnv t a b
   = RenderNodeEnv
-  { _rnVersioned :: Behavior t (Versioned a)
-  , _rnVersionedChanged :: Event t (Versioned a)
+  { _rnVersioned :: Dynamic t (Versioned a)
   , _rnPath :: Path a b
   , _rnFocus :: Dynamic t (Focus b)
   , _rnHashChanged :: Event t (Located b Hash)
@@ -145,8 +145,8 @@ renderNodeHash versioned hash = do
       ) <$>
     view rnHashChanged
 
-  eVersioned <- view rnVersionedChanged
-  bVersioned <- view rnVersioned
+  eVersioned <- views rnVersioned updated
+  bVersioned <- views rnVersioned current
 
   Dom.widgetHold_
     (renderMaybeNode versioned $ getNode versioned hash)
@@ -239,7 +239,7 @@ renderMaybeNode versioned mNode =
           (if hovered && not focused then "class" =: "syntax-hovered" else mempty)
 
       let isFocused = \case; Focus Nil -> True; _ -> False
-      dFocused <- views rnFocus $ fmap isFocused
+      dFocus <- view rnFocus
 
       rec
         let
@@ -260,7 +260,7 @@ renderMaybeNode versioned mNode =
             dMouseOverChild <*>
             dMouseOver
 
-        let dAttrs = mkAttrs <$> dFocused <*> dHovered
+        let dAttrs = (\focus hovered -> mkAttrs (isFocused focus) hovered) <$> dFocus <*> dHovered
 
         ((element, ()), dChildInfo) <-
           runDynamicWriterT .
@@ -274,17 +274,17 @@ renderMaybeNode versioned mNode =
         (\x -> (mempty @(ChildInfo t)) { _ciFocusElement = _ciFocusElement x }) <$>
         dChildInfo
       tellDyn $
-        (\focused -> (mempty @(ChildInfo t)) { _ciFocusElement = if focused then Just element else Nothing }) <$>
-        dFocused
+        (\focus -> (mempty @(ChildInfo t)) { _ciFocusElement = if isFocused focus then Just element else Nothing }) <$>
+        dFocus
 
       path <- view rnPath
       tellEvent $ Select path <$ gate (current dHovered) eMousedown
 
       eOpenMenu <- view $ rnNodeControls.ncOpenMenu
-      tellEvent $ OpenMenu <$ gate (current dFocused) eOpenMenu
+      tellEvent $ attachWithMaybe (\focus _ -> OpenMenu <$ guard (isFocused focus)) (current dFocus) eOpenMenu
 
       eCloseMenu <- view $ rnNodeControls.ncCloseMenu
-      tellEvent $ CloseMenu <$ gate (current dFocused) eCloseMenu
+      tellEvent $ attachWithMaybe (\focus _ -> CloseMenu <$ guard (isFocused focus)) (current dFocus) eCloseMenu
 
       pure ()
 
@@ -359,7 +359,6 @@ down level match m = do
     env' =
       RenderNodeEnv
       { _rnVersioned = env ^. rnVersioned
-      , _rnVersionedChanged = env ^. rnVersionedChanged
       , _rnFocus = fmap (downFocus match) (env ^. rnFocus)
       , _rnPath = Path.snoc (env ^. rnPath) level
       , _rnHashChanged =

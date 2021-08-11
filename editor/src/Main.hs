@@ -451,20 +451,19 @@ renderEditor keys _editorControls initial initialFocus =
                        Just (Nothing, Just (Focus p), Nothing)
                      _ -> Nothing
             )
-            bVersioned
+            (current dVersioned)
             (leftmost [Left <$> eContextMenu, Right <$> eNode])
 
         (eHashChanged, eFocusChanged, eVersionUpdated) =
           (fmapMaybe (view _1) eStep, fmapMaybe (view _2) eStep, fmapMaybe (view _3) eStep)
 
-      bVersioned <- hold initialVersioned eVersionUpdated
+      dVersioned <- holdDyn initialVersioned eVersionUpdated
       dFocus <- holdDyn initialFocus eFocusChanged
 
       let
         renderNodeEnv =
           RenderNodeEnv
-          { _rnVersioned = bVersioned
-          , _rnVersionedChanged = eVersionUpdated
+          { _rnVersioned = dVersioned
           , _rnPath = Nil
           , _rnFocus = dFocus
           , _rnHashChanged = eHashChanged
