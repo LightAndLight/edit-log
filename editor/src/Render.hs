@@ -260,11 +260,11 @@ renderMaybeNode versioned mNode =
             dMouseOverChild <*>
             dMouseOver
 
-        let dAttrs = (\focus hovered -> mkAttrs (isFocused focus) hovered) <$> dFocus <*> dHovered
+        let dAttrs = (\focus hovered -> unAttrs $ mkAttrs (isFocused focus) hovered) <$> dFocus <*> dHovered
 
         ((element, ()), dChildInfo) <-
           runDynamicWriterT .
-          Dom.elDynAttr' "div" (fmap unAttrs dAttrs) $
+          Dom.elDynAttr' "div" dAttrs $
           renderNode versioned node
 
       let eMousedown = Dom.domEvent Dom.Mousedown element
@@ -281,10 +281,18 @@ renderMaybeNode versioned mNode =
       tellEvent $ Select path <$ gate (current dHovered) eMousedown
 
       eOpenMenu <- view $ rnNodeControls.ncOpenMenu
-      tellEvent $ attachWithMaybe (\focus _ -> OpenMenu <$ guard (isFocused focus)) (current dFocus) eOpenMenu
+      tellEvent $
+        attachWithMaybe
+          (\focus _ -> OpenMenu <$ guard (isFocused focus))
+          (current dFocus)
+          eOpenMenu
 
       eCloseMenu <- view $ rnNodeControls.ncCloseMenu
-      tellEvent $ attachWithMaybe (\focus _ -> CloseMenu <$ guard (isFocused focus)) (current dFocus) eCloseMenu
+      tellEvent $
+        attachWithMaybe
+          (\focus _ -> CloseMenu <$ guard (isFocused focus))
+          (current dFocus)
+          eCloseMenu
 
       pure ()
 
